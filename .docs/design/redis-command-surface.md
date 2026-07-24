@@ -19,6 +19,7 @@ Defaults: namespace `spring:session:`, database `0`.
 | Shadow "expires" key | `spring:session:sessions:expires:{id}` | STRING (empty) | `PEXPIRE` = maxInactive·1000; `PERSIST` if maxInactive<0 (indexed only) |
 | Principal index set | `spring:session:index:org.springframework.session.FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME:{principal}` | SET | none (shrunk by `SREM` only) |
 | Expirations bucket set | `spring:session:expirations:{epochMillisRoundedToMinute}` | SET | `PEXPIRE` = (maxInactive+5min)·1000; `DEL` on cleanup |
+| Expirations sorted set (opt-in) | `spring:session:sessions:expirations` | ZSET | none (shrunk by `ZREM` only); **replaces** the bucket sets when a `SortedSetRedisSessionExpirationStore` bean is declared |
 | Created channel | `spring:session:event:0:created:{id}` | pub/sub | — |
 | Deleted keyevent (subscribed) | `__keyevent@0__:del` | pub/sub | — |
 | Expired keyevent (subscribed) | `__keyevent@0__:expired` | pub/sub | — |
@@ -64,6 +65,27 @@ Notes: simple-mode `save()` order is `RENAME` (only if id changed) then `HMSET` 
 
 Robustness aliases worth implementing even if not observed: `EXPIRE`/`EXPIREAT` (seconds),
 `PTTL`/`TTL`, `HGET`, `HDEL`, `TYPE`, `UNLINK`. Keep them cheap; do not block on them.
+
+### Sorted-set expiration store (opt-in) — research 02 §6
+
+An application may declare a `SortedSetRedisSessionExpirationStore` bean instead of the
+default minute buckets. Spring Session then keeps every live session in one sorted set
+scored by `lastAccessed + maxInactive` (epoch millis, as a `double`) with the session id —
+serialized, so opaque — as the member.
+
+| Wire command | Behaviour | Reply |
+|---|---|---|
+| `ZADD key score member [score member ...]` | add, or move a member already there to its new score | integer (# added, not counting moves) |
+| `ZREM key member [member ...]` | remove members; an emptied sorted set is gone (no `del` keyevent, as with `SREM`) | integer (# removed) |
+| `ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]` | members scored in `[min, max]`, highest score first, ties by member bytes descending; `(` prefixes an exclusive end, `+inf`/`-inf` an open one; a negative count means all | array |
+
+Sent as `ZREVRANGEBYSCORE key <now> 0 LIMIT 0 <cleanupCount>` (default 100). Scores arrive
+the way a client prints a `double`, so an epoch millisecond is written `1.7534567891E12`.
+The `ZADD` options (`NX`, `XX`, `GT`, `LT`, `CH`, `INCR`) are rejected rather than ignored.
+
+Behavioural note: this store touches the **session hash** key, not the shadow key, so its
+cleanup only forces a stale hash to be reclaimed. `SessionExpiredEvent` still comes from
+the shadow key expiring on its own TTL, so §C is unchanged and nothing extra is wired.
 
 ## C. Passive & active expiration (critical for indexed mode)
 

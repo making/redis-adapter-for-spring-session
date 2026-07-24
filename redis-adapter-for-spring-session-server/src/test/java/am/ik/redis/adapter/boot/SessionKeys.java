@@ -70,6 +70,26 @@ record SessionKeys(String namespace) {
 	}
 
 	/**
+	 * Returns the key of the sorted set the alternative expiration store keeps every live
+	 * session in, scored by the moment it is due to expire. It replaces the minute
+	 * buckets rather than joining them, and sits under the sessions prefix rather than
+	 * beside them.
+	 * @return the expirations sorted-set key, as a string because it is queried through
+	 * {@code RedisOperations}
+	 */
+	String expirationsSortedSet() {
+		return this.namespace + ":sessions:expirations";
+	}
+
+	/**
+	 * Returns {@link #expirationsSortedSet()} as the backend sees it.
+	 * @return the expirations sorted-set key in bytes
+	 */
+	byte[] expirationsSortedSetKey() {
+		return bytes(expirationsSortedSet());
+	}
+
+	/**
 	 * Returns the prefix of the channel Spring Session publishes session-created events
 	 * on. It carries the database index as well as the namespace, so it is the one name
 	 * that moves with either.

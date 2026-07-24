@@ -7,6 +7,7 @@ import am.ik.redis.adapter.store.HashValue;
 import am.ik.redis.adapter.store.KeyValueStore;
 import am.ik.redis.adapter.store.SetValue;
 import am.ik.redis.adapter.store.StringValue;
+import am.ik.redis.adapter.store.ZSetValue;
 
 /**
  * The key-level commands, which are what drives a session's lifetime: {@code EXISTS},
@@ -125,6 +126,7 @@ public final class KeyCommands {
 			case StringValue ignored -> "string";
 			case HashValue ignored -> "hash";
 			case SetValue ignored -> "set";
+			case ZSetValue ignored -> "zset";
 		};
 		context.writer().writeSimpleString(name);
 	}

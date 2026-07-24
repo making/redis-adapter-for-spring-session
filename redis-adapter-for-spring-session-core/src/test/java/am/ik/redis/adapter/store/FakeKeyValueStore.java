@@ -193,6 +193,55 @@ public final class FakeKeyValueStore implements KeyValueStore {
 	}
 
 	@Override
+	public int zadd(byte[] key, Map<byte[], Double> scoredMembers) {
+		ByteArrayKey k = ByteArrayKey.of(key);
+		Event[] event = { Event.NONE };
+		int[] added = { 0 };
+		this.entries.compute(k, (ignored, current) -> {
+			Entry live = live(current, event);
+			Map<ByteArrayKey, Double> merged = new LinkedHashMap<>();
+			if (live != null) {
+				merged.putAll(sortedSet(live));
+			}
+			int count = 0;
+			for (Map.Entry<byte[], Double> scored : scoredMembers.entrySet()) {
+				if (merged.put(ByteArrayKey.of(scored.getKey()), scored.getValue()) == null) {
+					count++;
+				}
+			}
+			added[0] = count;
+			return new Entry(new ZSetValue(merged), (live == null) ? null : live.expireAtMillis());
+		});
+		fire(k, event[0]);
+		return added[0];
+	}
+
+	@Override
+	public int zrem(byte[] key, List<byte[]> members) {
+		ByteArrayKey k = ByteArrayKey.of(key);
+		Event[] event = { Event.NONE };
+		int[] removed = { 0 };
+		this.entries.computeIfPresent(k, (ignored, current) -> {
+			Entry live = live(current, event);
+			if (live == null) {
+				return null;
+			}
+			Map<ByteArrayKey, Double> merged = new LinkedHashMap<>(sortedSet(live));
+			int count = 0;
+			for (byte[] member : members) {
+				if (merged.remove(ByteArrayKey.of(member)) != null) {
+					count++;
+				}
+			}
+			removed[0] = count;
+			// Redis removes a sorted set that has become empty; that is not a delete.
+			return merged.isEmpty() ? null : new Entry(new ZSetValue(merged), live.expireAtMillis());
+		});
+		fire(k, event[0]);
+		return removed[0];
+	}
+
+	@Override
 	public boolean delete(byte[] key) {
 		ByteArrayKey k = ByteArrayKey.of(key);
 		Event[] event = { Event.NONE };
@@ -338,6 +387,13 @@ public final class FakeKeyValueStore implements KeyValueStore {
 			return set.members();
 		}
 		throw new TypeMismatchException("operation against a key that does not hold a set");
+	}
+
+	private static Map<ByteArrayKey, Double> sortedSet(Entry entry) {
+		if (entry.value() instanceof ZSetValue sortedSet) {
+			return sortedSet.scores();
+		}
+		throw new TypeMismatchException("operation against a key that does not hold a sorted set");
 	}
 
 	private static byte[] concat(byte[] a, byte[] b) {

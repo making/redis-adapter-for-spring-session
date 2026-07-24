@@ -90,6 +90,16 @@ final class RecordingKeyValueStore implements KeyValueStore {
 	}
 
 	@Override
+	public int zadd(byte[] key, Map<byte[], Double> scoredMembers) {
+		return this.delegate.zadd(key, scoredMembers);
+	}
+
+	@Override
+	public int zrem(byte[] key, List<byte[]> members) {
+		return this.delegate.zrem(key, members);
+	}
+
+	@Override
 	public boolean delete(byte[] key) {
 		return this.delegate.delete(key);
 	}

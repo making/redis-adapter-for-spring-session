@@ -105,6 +105,32 @@ public interface KeyValueStore extends AutoCloseable {
 	int srem(byte[] key, List<byte[]> members);
 
 	/**
+	 * Adds the given members to the sorted set stored under {@code key}, creating the
+	 * sorted set if absent. A member that is already there (by value) moves to its new
+	 * score instead of being added a second time. Any existing TTL is preserved. The map
+	 * is iterated in order and applied last-wins; the store never calls {@code get} on it
+	 * (its {@code byte[]} keys use identity equality), so callers should pass an
+	 * insertion-ordered map that mirrors the wire order.
+	 * @param key the key bytes
+	 * @param scoredMembers the member-to-score pairs to add
+	 * @return the number of members newly added, which does not count the ones that only
+	 * moved
+	 * @throws TypeMismatchException if the key exists and does not hold a sorted set
+	 */
+	int zadd(byte[] key, Map<byte[], Double> scoredMembers);
+
+	/**
+	 * Removes the given members from the sorted set stored under {@code key}. When the
+	 * sorted set becomes empty the key is removed (matching Redis), but this does not
+	 * fire {@code onDeleted} — only {@link #delete(byte[])} does.
+	 * @param key the key bytes
+	 * @param members the members to remove
+	 * @return the number of members actually removed
+	 * @throws TypeMismatchException if the key exists and does not hold a sorted set
+	 */
+	int zrem(byte[] key, List<byte[]> members);
+
+	/**
 	 * Deletes {@code key}. If the key existed and had not expired this fires
 	 * {@link KeyEventListener#onDeleted} and returns {@code true}. If the key had already
 	 * expired this fires {@link KeyEventListener#onExpired} instead and returns

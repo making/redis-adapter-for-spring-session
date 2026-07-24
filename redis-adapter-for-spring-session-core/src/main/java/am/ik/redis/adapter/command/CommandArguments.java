@@ -1,6 +1,8 @@
 package am.ik.redis.adapter.command;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
+import java.util.OptionalDouble;
 
 /**
  * Helpers for reading raw command arguments.
@@ -54,6 +56,43 @@ final class CommandArguments {
 		}
 		catch (NumberFormatException e) {
 			throw RedisCommandException.notAnInteger();
+		}
+	}
+
+	/**
+	 * Parses text as a sorted-set score.
+	 *
+	 * <p>
+	 * A score is a {@code double}, and a client writes one the way Java prints one, so an
+	 * epoch millisecond arrives in scientific notation rather than as the plain integer
+	 * it conceptually is. The infinities are spelled as Redis spells them ({@code inf},
+	 * {@code +inf}, {@code -inf}, or written out in full), which is how an unbounded
+	 * range end reaches us. Nothing else is a score, including a not-a-number.
+	 *
+	 * <p>
+	 * Failure is reported as an empty result rather than as an exception, because the two
+	 * places a score is read — a member's score and the end of a range — are worded
+	 * differently by Redis when the text is not one.
+	 * @param text the argument text
+	 * @return the parsed score, or empty if the text is not a score
+	 */
+	static OptionalDouble decimal(String text) {
+		switch (text.toLowerCase(Locale.ROOT)) {
+			case "inf", "+inf", "infinity", "+infinity" -> {
+				return OptionalDouble.of(Double.POSITIVE_INFINITY);
+			}
+			case "-inf", "-infinity" -> {
+				return OptionalDouble.of(Double.NEGATIVE_INFINITY);
+			}
+			default -> {
+			}
+		}
+		try {
+			double value = Double.parseDouble(text);
+			return Double.isNaN(value) ? OptionalDouble.empty() : OptionalDouble.of(value);
+		}
+		catch (NumberFormatException e) {
+			return OptionalDouble.empty();
 		}
 	}
 

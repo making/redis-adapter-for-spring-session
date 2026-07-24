@@ -94,7 +94,7 @@ facade) and `jspecify` (nullness annotations) — the two already on the current
 Suggested packages (base `am.ik.redis.adapter`):
 
 - `am.ik.redis.adapter.store` — the **SPI only**: `KeyValueStore`, `RedisValue` (sealed:
-  string/hash/set, zset later) with `ByteArrayKey`, `KeyEventListener`,
+  string/hash/set/zset) with `ByteArrayKey`, `KeyEventListener`,
   `TypeMismatchException`. The in-memory reference implementation does **not** live here; it
   is a separate module (`am.ik.redis.adapter.inmemory`, see §6).
 - `am.ik.redis.adapter.protocol` — `RespReader`, `RespWriter`, RESP element model.
@@ -112,7 +112,7 @@ The SPI is the **entire contract a future backend must satisfy**. Keep it minima
 Redis-agnostic. Sketch (final signatures decided in task 002):
 
 - Values are **typed**: an entry is one of `StringValue(byte[])`, `HashValue(Map<field,
-  value>)`, `SetValue(Set<member>)` (and `ZSetValue` later). Fields/members/values are
+  value>)`, `SetValue(Set<member>)`, `ZSetValue(Map<member, score>)`. Fields/members/values are
   raw `byte[]`; the store must key everything by a **value-equal wrapper**, never raw
   `byte[]` (which has identity `equals`).
 - Per-key absolute TTL: `expireAt(key, epochMilli)`, `persist(key)`, `getExpireAt(key)`.
@@ -149,8 +149,10 @@ Full detail with exact semantics, key formats, and edge cases:
   password is configured, accepted otherwise — see §8.1), `CLIENT`
   (`SETINFO`/`SETNAME` → OK), `SELECT`, `QUIT`, `COMMAND` (minimal). The exact handshake
   set is pinned empirically against a real Lettuce client (task 004).
-- Optional (`SortedSetRedisSessionExpirationStore`): `ZADD`, `ZREM`, `ZREVRANGEBYSCORE`
-  (task 009).
+- Opt-in (`SortedSetRedisSessionExpirationStore`): `ZADD`, `ZREM`, `ZREVRANGEBYSCORE`
+  (task 009, done). An application that declares that bean gets one sorted set of
+  expirations instead of the minute buckets; nothing else about the adapter changes,
+  because a session's death is still announced by the shadow key.
 
 ## 6. Module layout & dependency rules
 

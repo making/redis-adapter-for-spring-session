@@ -50,4 +50,13 @@ public final class RedisCommandException extends RuntimeException {
 		return new RedisCommandException("ERR value is not an integer or out of range");
 	}
 
+	/**
+	 * Creates the standard Redis reply for an argument that should have been a sorted-set
+	 * score.
+	 * @return the exception to throw
+	 */
+	public static RedisCommandException notAValidFloat() {
+		return new RedisCommandException("ERR value is not a valid float");
+	}
+
 }

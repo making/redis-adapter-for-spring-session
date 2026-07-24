@@ -20,6 +20,7 @@ import am.ik.redis.adapter.store.RedisValue;
 import am.ik.redis.adapter.store.SetValue;
 import am.ik.redis.adapter.store.StringValue;
 import am.ik.redis.adapter.store.TypeMismatchException;
+import am.ik.redis.adapter.store.ZSetValue;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,8 +31,8 @@ import org.slf4j.LoggerFactory;
  * <p>
  * This backend is inherently single-node (each instance owns its own map) and is
  * therefore the development, single-instance and test backend. It supports string / hash
- * / set values, absolute per-key TTL, passive and active expiration, and delete/expire
- * callbacks.
+ * / set / sorted-set values, absolute per-key TTL, passive and active expiration, and
+ * delete/expire callbacks.
  *
  * <h2>Concurrency model</h2> Each key maps to an immutable {@link Entry} (value +
  * absolute expiry). Mutations replace the entry atomically via
@@ -282,6 +283,76 @@ public final class InMemoryKeyValueStore implements KeyValueStore {
 				return null; // Redis removes an emptied set; no del event (see javadoc)
 			}
 			return new Entry(new SetValue(merged), cur.expireAtMillis());
+		});
+		if (expired[0]) {
+			fireExpired(k);
+		}
+		return removed[0];
+	}
+
+	// --- sorted set --------------------------------------------------------------------
+
+	@Override
+	public int zadd(byte[] key, Map<byte[], Double> scoredMembers) {
+		ByteArrayKey k = ByteArrayKey.of(key);
+		long now = this.clock.getAsLong();
+		boolean[] expired = { false };
+		int[] added = { 0 };
+		this.map.compute(k, (kk, cur) -> {
+			cur = passiveExpire(cur, now, expired);
+			Map<ByteArrayKey, Double> merged = new LinkedHashMap<>();
+			long deadline = NO_EXPIRY;
+			if (cur != null) {
+				if (!(cur.value() instanceof ZSetValue zv)) {
+					throw new TypeMismatchException("ZADD against a key that does not hold a sorted set");
+				}
+				merged.putAll(zv.scores());
+				deadline = cur.expireAtMillis();
+			}
+			int count = 0;
+			for (Map.Entry<byte[], Double> scored : scoredMembers.entrySet()) {
+				if (merged.put(ByteArrayKey.of(scored.getKey()), scored.getValue()) == null) {
+					count++;
+				}
+			}
+			added[0] = count;
+			return new Entry(new ZSetValue(merged), deadline);
+		});
+		if (expired[0]) {
+			fireExpired(k);
+		}
+		return added[0];
+	}
+
+	@Override
+	public int zrem(byte[] key, List<byte[]> members) {
+		ByteArrayKey k = ByteArrayKey.of(key);
+		long now = this.clock.getAsLong();
+		boolean[] expired = { false };
+		int[] removed = { 0 };
+		this.map.compute(k, (kk, cur) -> {
+			if (cur == null) {
+				return null;
+			}
+			if (cur.isExpired(now)) {
+				expired[0] = true;
+				return null;
+			}
+			if (!(cur.value() instanceof ZSetValue zv)) {
+				throw new TypeMismatchException("ZREM against a key that does not hold a sorted set");
+			}
+			Map<ByteArrayKey, Double> merged = new LinkedHashMap<>(zv.scores());
+			int count = 0;
+			for (byte[] member : members) {
+				if (merged.remove(ByteArrayKey.of(member)) != null) {
+					count++;
+				}
+			}
+			removed[0] = count;
+			if (merged.isEmpty()) {
+				return null; // Redis removes an emptied sorted set; no del event
+			}
+			return new Entry(new ZSetValue(merged), cur.expireAtMillis());
 		});
 		if (expired[0]) {
 			fireExpired(k);

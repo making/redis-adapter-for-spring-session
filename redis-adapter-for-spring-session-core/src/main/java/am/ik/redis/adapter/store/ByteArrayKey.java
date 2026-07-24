@@ -17,8 +17,13 @@ import org.jspecify.annotations.Nullable;
  * The wrapped bytes are copied on construction and copied again when handed back through
  * {@link #asBytes()}, so an instance is fully insulated from external mutation and safe
  * to use as a stable map key. Instances are immutable and thread-safe.
+ *
+ * <p>
+ * Keys are also ordered, by comparing their bytes as <em>unsigned</em> values, which is
+ * the order Redis puts two equally scored members of a sorted set in. The ordering is
+ * consistent with {@link #equals(Object)}.
  */
-public final class ByteArrayKey {
+public final class ByteArrayKey implements Comparable<ByteArrayKey> {
 
 	private final byte[] bytes;
 
@@ -54,6 +59,18 @@ public final class ByteArrayKey {
 	 */
 	public int length() {
 		return this.bytes.length;
+	}
+
+	/**
+	 * Compares two keys by their bytes, taken as unsigned values, the shorter key coming
+	 * first when one is a prefix of the other.
+	 * @param other the key to compare against
+	 * @return a negative number, zero or a positive number as this key sorts before, the
+	 * same as, or after {@code other}
+	 */
+	@Override
+	public int compareTo(ByteArrayKey other) {
+		return Arrays.compareUnsigned(this.bytes, other.bytes);
 	}
 
 	@Override

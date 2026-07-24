@@ -73,7 +73,7 @@ research; if you need them again, unzip
 | 007 | Indexed-mode end-to-end (events + index + cleanup) | done |
 | 008 | Spring Boot server module (config, lifecycle, actuator) | done |
 | 013 | Non-default namespace and database end-to-end (part 1 before 008, part 2 after) | done |
-| 009 | ZSet commands for SortedSetRedisSessionExpirationStore (optional) | not started |
+| 009 | ZSet commands for SortedSetRedisSessionExpirationStore (optional) | done |
 | 010 | TLS via Spring Boot SslBundle | not started |
 | 014 | GraalVM native image and container image | not started |
 | 011 | README, docs & tested examples | not started |

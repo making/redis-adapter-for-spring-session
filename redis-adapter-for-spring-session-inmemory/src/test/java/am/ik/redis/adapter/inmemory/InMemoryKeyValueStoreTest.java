@@ -21,6 +21,7 @@ import am.ik.redis.adapter.store.RedisValue;
 import am.ik.redis.adapter.store.SetValue;
 import am.ik.redis.adapter.store.StringValue;
 import am.ik.redis.adapter.store.TypeMismatchException;
+import am.ik.redis.adapter.store.ZSetValue;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +31,7 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 class InMemoryKeyValueStoreTest {
 
@@ -130,6 +132,41 @@ class InMemoryKeyValueStoreTest {
 		assertThat(this.store.srem(b("s"), List.of(b("x")))).isEqualTo(1);
 		assertThat(this.store.exists(b("s"))).isFalse();
 		assertThat(this.listener.deleted).isEmpty();
+	}
+
+	// --- SORTED SET --------------------------------------------------------------------
+
+	@Test
+	void sortedSetAddRemoveMembersRoundTripByValue() {
+		byte[] m1 = { 1, 2, 3 };
+		byte[] m1copy = { 1, 2, 3 };
+		byte[] m2 = { 4, 5 };
+		assertThat(this.store.zadd(b("z"), scoredMap(m1, 1000.0, m2, 2000.0))).isEqualTo(2);
+		// value-equal, so it moves rather than being added again
+		assertThat(this.store.zadd(b("z"), scoredMap(m1copy, 3000.0))).isZero();
+
+		ZSetValue sortedSet = asSortedSet(this.store.get(b("z")));
+		assertThat(sortedSet.scores()).containsOnly(entry(ByteArrayKey.of(m1), 3000.0),
+				entry(ByteArrayKey.of(m2), 2000.0));
+
+		assertThat(this.store.zrem(b("z"), List.of(m1copy))).isEqualTo(1); // value-equal
+		assertThat(asSortedSet(this.store.get(b("z"))).scores()).containsOnlyKeys(ByteArrayKey.of(m2));
+	}
+
+	@Test
+	void zremEmptyingSortedSetRemovesKeyWithoutDeleteEvent() {
+		this.store.zadd(b("z"), scoredMap(b("x"), 1000.0));
+		assertThat(this.store.zrem(b("z"), List.of(b("x")))).isEqualTo(1);
+		assertThat(this.store.exists(b("z"))).isFalse();
+		assertThat(this.listener.deleted).isEmpty();
+	}
+
+	@Test
+	void sortedSetOperationAgainstWrongTypeThrows() {
+		this.store.sadd(b("s"), List.of(b("x")));
+		assertThatThrownBy(() -> this.store.zadd(b("s"), scoredMap(b("x"), 1000.0)))
+			.isInstanceOf(TypeMismatchException.class);
+		assertThatThrownBy(() -> this.store.zrem(b("s"), List.of(b("x")))).isInstanceOf(TypeMismatchException.class);
 	}
 
 	// --- DELETE ------------------------------------------------------------------------
@@ -405,6 +442,14 @@ class InMemoryKeyValueStoreTest {
 		return m;
 	}
 
+	private static Map<byte[], Double> scoredMap(Object... memberAndScore) {
+		Map<byte[], Double> m = new LinkedHashMap<>();
+		for (int i = 0; i < memberAndScore.length; i += 2) {
+			m.put((byte[]) memberAndScore[i], (Double) memberAndScore[i + 1]);
+		}
+		return m;
+	}
+
 	private static StringValue asString(@Nullable RedisValue value) {
 		assertThat(value).isInstanceOf(StringValue.class);
 		return (StringValue) requireNonNull(value);
@@ -418,6 +463,11 @@ class InMemoryKeyValueStoreTest {
 	private static SetValue asSet(@Nullable RedisValue value) {
 		assertThat(value).isInstanceOf(SetValue.class);
 		return (SetValue) requireNonNull(value);
+	}
+
+	private static ZSetValue asSortedSet(@Nullable RedisValue value) {
+		assertThat(value).isInstanceOf(ZSetValue.class);
+		return (ZSetValue) requireNonNull(value);
 	}
 
 	private static void awaitUntil(BooleanSupplier condition, Duration timeout) throws InterruptedException {

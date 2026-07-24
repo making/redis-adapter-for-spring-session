@@ -35,6 +35,7 @@ public final class StandardCommands {
 		StringCommands.registerTo(builder);
 		HashCommands.registerTo(builder);
 		SetCommands.registerTo(builder);
+		ZSetCommands.registerTo(builder);
 		PubSubCommands.registerTo(builder);
 	}
 
