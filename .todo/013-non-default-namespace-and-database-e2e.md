@@ -63,7 +63,13 @@ deleted / expired events and principal-index lookups as it does on the defaults.
 
 ## Steps / deliverables
 
-### Part 1 — before 008
+### Part 1 — before 008 (done)
+Delivered as `RedisAdapterServerMultiDatabaseKeyspaceTest` in the core module. It found no
+fault: the per-database `KeyspaceNotifier` already published the right channel names, so
+there was nothing to fix and no regression test to add. That the test would have caught a
+fault was checked by hard-coding `__keyevent@0__:` in `KeyspaceNotifier.channel` and
+watching the two database-1 tests go red on the channel name.
+
 1. A raw-protocol test (core module, alongside the existing Lettuce integration tests) that
    subscribes to `__keyevent@1__:expired` and asserts a key expiring on database 1 arrives
    there and *not* on `__keyevent@0__:expired`, plus the `SELECT` routing that puts the key
