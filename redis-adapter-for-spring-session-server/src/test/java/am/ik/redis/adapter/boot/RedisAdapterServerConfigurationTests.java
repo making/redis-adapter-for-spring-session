@@ -33,6 +33,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * real server and, where the answer is only visible on the wire, drives it with a real
  * Redis client: a property that binds but changes nothing would pass any assertion made
  * on the properties themselves.
+ *
+ * <p>
+ * The transport-security properties are covered on their own, in
+ * {@link RedisAdapterServerTlsConfigurationTests}.
  */
 class RedisAdapterServerConfigurationTests {
 
@@ -133,26 +137,6 @@ class RedisAdapterServerConfigurationTests {
 					connection -> connection.sync().ping());
 			assertThat(reply).isEqualTo("PONG");
 		});
-	}
-
-	/**
-	 * Serving plain TCP to an operator who asked for TLS would be the one failure nobody
-	 * notices, so an unsupported setting stops the server instead. Naming a bundle is as
-	 * much of a request as switching it on, and is refused the same way.
-	 */
-	@Test
-	void refusesToStartWhenAskedForTlsItCannotServe() {
-		this.runner.withPropertyValues("redis-adapter.ssl.enabled=true")
-			.run(context -> assertThat(context).hasFailed()
-				.getFailure()
-				.rootCause()
-				.hasMessage("redis-adapter.ssl is set, but this server cannot serve TLS yet"));
-
-		this.runner.withPropertyValues("redis-adapter.ssl.bundle=adapter")
-			.run(context -> assertThat(context).hasFailed()
-				.getFailure()
-				.rootCause()
-				.hasMessage("redis-adapter.ssl is set, but this server cannot serve TLS yet"));
 	}
 
 	@Test

@@ -57,11 +57,65 @@ public record RedisAdapterProperties(@DefaultValue("0.0.0.0") String bindAddress
 	 * Transport security for the adapter's port. Clients then connect over
 	 * {@code rediss://}.
 	 *
-	 * @param enabled whether to serve TLS rather than plain TCP
-	 * @param bundle the name of the {@code spring.ssl.bundle.*} holding the server
-	 * certificate and key
+	 * <p>
+	 * Naming a bundle is all it takes: {@code enabled} is unset by default and then
+	 * follows the bundle. It exists so that an operator can keep a bundle configured and
+	 * still fall back to plain TCP, by writing {@code false} and meaning it. What it
+	 * deliberately cannot do is leave a server plain because a property was forgotten —
+	 * the one failure nobody notices, since a plain port answers every client that asks.
+	 *
+	 * @param enabled whether to serve TLS rather than plain TCP; unset means TLS exactly
+	 * when a bundle is named
+	 * @param bundle the name of the {@code spring.ssl.bundle.*} holding the certificate
+	 * and key the server identifies itself with, and, for {@link ClientAuth client
+	 * authentication}, the certificates it verifies clients against
+	 * @param clientAuth whether clients have to identify themselves with a certificate of
+	 * their own
 	 */
-	public record Ssl(@DefaultValue("false") boolean enabled, @Nullable String bundle) {
+	public record Ssl(@Nullable Boolean enabled, @Nullable String bundle, @DefaultValue("none") ClientAuth clientAuth) {
+
+		public Ssl {
+			if (Boolean.TRUE.equals(enabled) && bundle == null) {
+				// Starting plain here would serve every client in clear text under a
+				// setting that says otherwise.
+				throw new IllegalArgumentException(
+						"redis-adapter.ssl.enabled is true but redis-adapter.ssl.bundle names no SSL bundle");
+			}
+		}
+
+		/**
+		 * Reports whether the port is served over TLS: when it is, {@link #bundle()}
+		 * names the bundle it is served from.
+		 * @return {@code true} if the server should terminate TLS
+		 */
+		public boolean isEnabled() {
+			Boolean enabled = this.enabled;
+			return (enabled != null) ? enabled : (this.bundle != null);
+		}
+
+		/**
+		 * What the server asks of a client's own certificate, mirroring the SSL socket
+		 * settings the JDK offers.
+		 */
+		public enum ClientAuth {
+
+			/** Clients are not asked for a certificate. */
+			NONE,
+
+			/**
+			 * Clients are asked for a certificate but are served without one, which is
+			 * what makes it usable while clients are still being issued certificates.
+			 */
+			WANT,
+
+			/**
+			 * Clients that present no certificate the bundle's trust store accepts are
+			 * refused: the certificate is the credential.
+			 */
+			NEED
+
+		}
+
 	}
 
 }

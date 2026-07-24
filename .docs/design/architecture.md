@@ -258,11 +258,25 @@ integration is split to keep the core dependency-free:
   abstraction, never by hand-loading keystores. The operator defines a bundle under
   `spring.ssl.bundle.*` (JKS/PEM), and `redis-adapter.ssl.bundle=<name>` selects it. The
   server module resolves the `SslBundle` from `SslBundles`, calls
-  `sslBundle.createSslContext()`, and injects
-  `sslContext.getServerSocketFactory()` into `RedisAdapterServer`. Bundle reload/rotation
-  (`SslBundles.addBundleUpdateHandler`) may be honoured later.
+  `sslBundle.createSslContext()`, and passes its `getServerSocketFactory()` to
+  `RedisAdapterServer` — wrapped in `SslBundleServerSocketFactory`, which applies what an
+  `SSLContext` cannot carry: the bundle's `SslOptions` (ciphers, enabled protocols) and
+  `redis-adapter.ssl.client-auth` (`none`/`want`/`need`, i.e. mutual TLS), both per socket.
 
-This is detailed in task 010. When no bundle is configured the server stays plain TCP.
+When no bundle is named the server stays plain TCP. `redis-adapter.ssl.enabled` is
+deliberately *unset* by default rather than `false`: naming a bundle is enough to serve
+TLS, `enabled=false` is a written opt-out that keeps the bundle configured, and
+`enabled=true` without a bundle is refused as the properties bind. No spelling of the
+settings leaves a port plain because a property was forgotten — a plain port answers every
+client, so that failure is the one nobody notices. The decision is made inside the bean
+rather than by `@ConditionalOnProperty`, so that an operator can still choose it in an
+ahead-of-time compiled image (task 014), where conditions were evaluated as the image was
+built.
+
+The `SSLContext` is built once, with the server. Certificate material replaced on disk
+therefore takes effect on restart; following a bundle Spring Boot reloads
+(`SslBundles.addBundleUpdateHandler`) means rebinding the listening socket and is left for
+later.
 
 ## 9. Explicitly out of scope
 

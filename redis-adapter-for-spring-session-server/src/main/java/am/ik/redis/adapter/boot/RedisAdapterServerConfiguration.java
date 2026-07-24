@@ -1,8 +1,15 @@
 package am.ik.redis.adapter.boot;
 
-import am.ik.redis.adapter.server.RedisAdapterServer;
+import javax.net.ServerSocketFactory;
 
+import am.ik.redis.adapter.server.RedisAdapterServer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.ssl.SslBundle;
+import org.springframework.boot.ssl.SslBundles;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -15,35 +22,74 @@ import org.springframework.context.annotation.Configuration;
  * taken stop the application there and then, rather than leaving a process running that
  * serves nobody, and it is what lets the rest of the application ask which port the
  * server ended up on when it was given an ephemeral one.
+ *
+ * <p>
+ * Whether the port is served over TLS is decided here, as the bean is created, rather
+ * than by a condition on it. Conditions are evaluated once, while an ahead-of-time
+ * compiled image is built, which would leave {@code redis-adapter.ssl} settled by whoever
+ * built the image instead of by the operator who deploys it.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(RedisAdapterProperties.class)
 public class RedisAdapterServerConfiguration {
 
+	private static final Logger logger = LoggerFactory.getLogger(RedisAdapterServerConfiguration.class);
+
 	/**
 	 * Creates the server and binds its port.
-	 * @param properties where to listen, how to authenticate clients, how long to let
-	 * them finish on shutdown
+	 * @param properties where to listen, how to authenticate clients, whether to serve
+	 * TLS, how long to let them finish on shutdown
 	 * @param databases the backends of the databases it serves
+	 * @param sslBundles the certificate material of the application, which
+	 * {@code redis-adapter.ssl.bundle} picks from; absent in a context that has no SSL
+	 * configuration at all
 	 * @return the bound server, not yet accepting connections
 	 */
 	@Bean(initMethod = "bind")
-	public RedisAdapterServer redisAdapterServer(RedisAdapterProperties properties, KeyValueStores databases) {
-		if (properties.ssl().enabled() || properties.ssl().bundle() != null) {
-			// Serving plain TCP to an operator who asked for TLS is the one failure that
-			// is never noticed, so any sign of the request is refused rather than logged.
-			throw new IllegalStateException("redis-adapter.ssl is set, but this server cannot serve TLS yet");
-		}
+	public RedisAdapterServer redisAdapterServer(RedisAdapterProperties properties, KeyValueStores databases,
+			ObjectProvider<SslBundles> sslBundles) {
 		RedisAdapterServer.Builder builder = RedisAdapterServer.builder()
 			.host(properties.bindAddress())
 			.port(properties.port())
 			.shutdownTimeout(properties.shutdownTimeout())
+			.serverSocketFactory(serverSocketFactory(properties.ssl(), sslBundles))
 			.databases(databases.databases());
 		String password = properties.password();
 		if (password != null) {
 			builder.password(password);
 		}
 		return builder.build();
+	}
+
+	/**
+	 * Resolves what the listening socket is created by: the SSL bundle that was named, or
+	 * plain TCP when none was.
+	 * @param ssl the transport security settings
+	 * @param sslBundles the certificate material of the application
+	 * @return the factory the server binds its port with
+	 * @throws IllegalStateException if TLS was asked for in a context that has no SSL
+	 * bundles
+	 */
+	private static ServerSocketFactory serverSocketFactory(RedisAdapterProperties.Ssl ssl,
+			ObjectProvider<SslBundles> sslBundles) {
+		String name = ssl.bundle();
+		if (!ssl.isEnabled()) {
+			if (name != null) {
+				logger.warn("redis-adapter.ssl.bundle={} is configured but redis-adapter.ssl.enabled is false; "
+						+ "the adapter is serving plain TCP", name);
+			}
+			return ServerSocketFactory.getDefault();
+		}
+		// isEnabled() is only ever true with a bundle to serve, since a server enabled
+		// without one is refused as the properties bind.
+		SslBundles bundles = sslBundles.getIfAvailable();
+		if (bundles == null || name == null) {
+			throw new IllegalStateException("redis-adapter.ssl asks for TLS, but this application has no SSL bundles; "
+					+ "define one under spring.ssl.bundle.*");
+		}
+		SslBundle bundle = bundles.getBundle(name);
+		logger.info("Serving TLS from SSL bundle '{}', client authentication {}", name, ssl.clientAuth());
+		return new SslBundleServerSocketFactory(bundle, ssl.clientAuth());
 	}
 
 	/**

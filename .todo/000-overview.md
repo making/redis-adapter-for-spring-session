@@ -39,7 +39,9 @@ research; if you need them again, unzip
   raw-protocol test that the keyspace channel carries the database index) needs only 004
   and lands before 008, while its part 2 (the Spring Session E2E) is built on the
   `databases` property 008 introduces rather than on a throwaway test configuration.
-- **010** (TLS) needs 004's `ServerSocketFactory` seam + 008's Spring Boot module.
+- **010** (TLS) needs 004's `ServerSocketFactory` seam + 008's Spring Boot module. **015**
+  (certificate rotation without a restart) is the follow-up it deliberately left out; it is
+  optional and blocks nothing, 011 included.
 - **014** (native image / container) is best done after 010, since certificate material
   needs resource hints in a native binary. It also carries a rule that applies to every
   task after it: Spring evaluates `@Conditional` while the image is built, so a property an
@@ -74,6 +76,7 @@ research; if you need them again, unzip
 | 008 | Spring Boot server module (config, lifecycle, actuator) | done |
 | 013 | Non-default namespace and database end-to-end (part 1 before 008, part 2 after) | done |
 | 009 | ZSet commands for SortedSetRedisSessionExpirationStore (optional) | done |
-| 010 | TLS via Spring Boot SslBundle | not started |
+| 010 | TLS via Spring Boot SslBundle | done |
 | 014 | GraalVM native image and container image | not started |
 | 011 | README, docs & tested examples | not started |
+| 015 | Reload the server certificate without a restart (optional) | not started |
