@@ -1,0 +1,62 @@
+# TODO overview — Redis Adapter for Spring Session
+
+Each `NNN-*.md` file is a self-contained unit of work that a fresh Claude Code session can
+pick up cold. Every task assumes you have first read:
+
+- `.docs/design/architecture.md` — the overall design and module layout.
+- `.docs/design/redis-command-surface.md` — the exact command/keyspace behaviour to build.
+- The relevant `.docs/research/0*.md` files (cited per task).
+
+Spring Session sources to consult live at `/Users/toshiaki/git/spring-session`
+(module `spring-session-data-redis`). Spring Data Redis 4.1.0 sources were extracted during
+research; if you need them again, unzip
+`~/.m2/repository/org/springframework/data/spring-data-redis/4.1.0/spring-data-redis-4.1.0-sources.jar`.
+
+## Sequence & dependencies
+
+```
+001 restructure ─┬─ 002 store SPI + in-memory ─┐
+                 ├─ 003 RESP codec ─── 004 server + handshake ─┐
+                 │                                             │
+                 └────────────────── 005 data cmds + simple E2E ┴─ 006 pubsub/set/keyspace ── 007 indexed E2E
+                                                   │                                              │
+                                                   └───────────── 008 Spring Boot server module ──┤
+                                                                                                  ├─ 009 ZSet (optional)
+                                                                                                  ├─ 010 TLS (SslBundle)
+                                                                                                  └─ 011 docs / README
+```
+
+- **001** must land first (build structure).
+- **002** and **003** are independent and can be done in parallel after 001.
+- **004** needs 003. **005** needs 002 + 003 + 004. **006** needs 005. **007** needs 006.
+- **008** needs a working core (after 005; richer after 007). **009** (ZSet) after 007.
+- **010** (TLS) needs 004's `ServerSocketFactory` seam + 008's Spring Boot module.
+- **011** (docs/README) comes last, after 007–010, so documented behaviour (incl. TLS) is
+  proven.
+
+## Definition of done (every task)
+
+- `./mvnw clean spring-javaformat:apply compile` succeeds for all modules.
+- `./mvnw spring-javaformat:apply test` is green.
+- New behaviour is covered by a **failing-first** test (unit or auto-runnable E2E) per the
+  repo bug-fix / TDD rule.
+- Follow the `java-code-standards`, `spring-code-standards`, `java-package-structure`, and
+  `java-testing-standards` skills. Comments/Javadoc in English. No emojis in docs.
+- On completion run the notify command:
+  `osascript -e 'display notification "<body>" with title "<title>"'`.
+
+## Status
+
+| # | Title | State |
+|---|---|---|
+| 001 | Multi-module restructure & build setup | not started |
+| 002 | KeyValueStore SPI + in-memory backend | not started |
+| 003 | RESP protocol codec | not started |
+| 004 | Virtual-thread TCP server + handshake commands | not started |
+| 005 | Data commands + simple-mode end-to-end | not started |
+| 006 | Pub/Sub + Set commands + keyspace notifications | not started |
+| 007 | Indexed-mode end-to-end (events + index + cleanup) | not started |
+| 008 | Spring Boot server module (config, lifecycle, actuator) | not started |
+| 009 | ZSet commands for SortedSetRedisSessionExpirationStore (optional) | not started |
+| 010 | TLS via Spring Boot SslBundle | not started |
+| 011 | README, docs & tested examples | not started |
