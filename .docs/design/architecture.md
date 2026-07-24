@@ -190,8 +190,9 @@ deliberately a peer of those future backends rather than a privileged part of `c
 > `-inmemory` module for the reasons above. Naming: module
 > `redis-adapter-for-spring-session-inmemory`, package `am.ik.redis.adapter.inmemory`. The
 > SPI types (`KeyValueStore`, `RedisValue` + records, `ByteArrayKey`, `KeyEventListener`,
-> `TypeMismatchException`) stay in `core` under `am.ik.redis.adapter.store`. This is a
-> recorded policy; the code move itself is a later task.
+> `TypeMismatchException`) stay in `core` under `am.ik.redis.adapter.store`. The move has
+> been carried out; an ArchUnit guard in `core` keeps a concrete backend from creeping
+> back in.
 
 ## 7. Statelessness & horizontal scaling (design note, not a task by itself)
 

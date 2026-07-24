@@ -10,9 +10,9 @@
 		<version>0.1.0-SNAPSHOT</version>
 	</parent>
 
-	<artifactId>redis-adapter-for-spring-session-server</artifactId>
-	<name>redis-adapter-for-spring-session-server</name>
-	<description>Spring Boot server that runs the Redis adapter for Spring Session</description>
+	<artifactId>redis-adapter-for-spring-session-inmemory</artifactId>
+	<name>redis-adapter-for-spring-session-inmemory</name>
+	<description>In-memory reference backend of the Redis adapter for Spring Session</description>
 
 	<dependencies>
 		<dependency>
@@ -21,34 +21,26 @@
 			<version>${project.version}</version>
 		</dependency>
 		<dependency>
-			<groupId>am.ik.redis</groupId>
-			<artifactId>redis-adapter-for-spring-session-inmemory</artifactId>
-			<version>${project.version}</version>
+			<groupId>org.jspecify</groupId>
+			<artifactId>jspecify</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter</artifactId>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
 		</dependency>
 		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-actuator</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-test</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<!-- End-to-end compatibility tests drive this server through a real Lettuce client
-		     running stock Spring Session, so both are test-scoped here and never reach the
-		     server's runtime classpath. -->
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-data-redis</artifactId>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-api</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
-			<groupId>org.springframework.session</groupId>
-			<artifactId>spring-session-data-redis</artifactId>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-engine</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

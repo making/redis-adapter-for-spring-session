@@ -11,8 +11,11 @@ repository.
 ```
 
 ## Design Requirements
-- **Package**: `am.ik.redis.adapter` - Main package (core module); the Spring Boot server module uses `am.ik.redis.adapter.boot`.
-- **Modules**: `redis-adapter-for-spring-session-core` (dependency-free core) and `redis-adapter-for-spring-session-server` (Spring Boot server).
+- **Package**: `am.ik.redis.adapter` - Main package (core module); the in-memory backend module uses `am.ik.redis.adapter.inmemory` and the Spring Boot server module uses `am.ik.redis.adapter.boot`. A package is never split across two modules.
+- **Modules**:
+  - `redis-adapter-for-spring-session-core` - dependency-free core: the `KeyValueStore` SPI plus the protocol, command, pubsub and server layers. It never contains a concrete `KeyValueStore` implementation.
+  - `redis-adapter-for-spring-session-inmemory` - the bundled in-memory reference backend. Depends on `core` only, exactly like any future external backend.
+  - `redis-adapter-for-spring-session-server` - Spring Boot server. Depends on `core` + `inmemory` and hosts the end-to-end compatibility tests.
 
 ## Implemented Features
 

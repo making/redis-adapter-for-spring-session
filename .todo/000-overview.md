@@ -54,7 +54,7 @@ research; if you need them again, unzip
 | 001 | Multi-module restructure & build setup | done |
 | 002 | KeyValueStore SPI + in-memory backend | done |
 | 003 | RESP protocol codec | done |
-| 012 | Split the in-memory backend into its own module | not started (do before 004/005) |
+| 012 | Split the in-memory backend into its own module | done |
 | 004 | Virtual-thread TCP server + handshake commands | not started |
 | 005 | Data commands + simple-mode end-to-end | not started |
 | 006 | Pub/Sub + Set commands + keyspace notifications | not started |

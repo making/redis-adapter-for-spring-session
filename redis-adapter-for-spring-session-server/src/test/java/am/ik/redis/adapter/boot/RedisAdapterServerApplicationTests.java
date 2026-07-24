@@ -1,21 +1,33 @@
 package am.ik.redis.adapter.boot;
 
-import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
+import am.ik.redis.adapter.inmemory.InMemoryKeyValueStore;
+import am.ik.redis.adapter.store.KeyValueStore;
 
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Smoke test proving the server module compiles, the application class is a Spring Boot
- * application, and the JUnit 5 + AssertJ test infrastructure from
- * {@code spring-boot-starter-test} is wired. It deliberately does not start an
- * application context, since no beans are defined yet.
+ * Verifies that the server application context starts and that the bundled in-memory
+ * backend from the {@code -inmemory} module is wired as the default
+ * {@link KeyValueStore}.
  */
+@SpringBootTest
 class RedisAdapterServerApplicationTests {
 
+	@Autowired
+	KeyValueStore keyValueStore;
+
 	@Test
-	void applicationClassIsAnnotatedWithSpringBootApplication() {
-		assertThat(RedisAdapterServerApplication.class.isAnnotationPresent(SpringBootApplication.class)).isTrue();
+	void inMemoryBackendIsWiredAsTheDefaultStore() {
+		assertThat(this.keyValueStore).isInstanceOf(InMemoryKeyValueStore.class);
+
+		byte[] key = "wiring-probe".getBytes(UTF_8);
+		this.keyValueStore.append(key, "v".getBytes(UTF_8));
+		assertThat(this.keyValueStore.exists(key)).isTrue();
 	}
 
 }

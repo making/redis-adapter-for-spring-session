@@ -1,12 +1,13 @@
 /**
- * Storage layer: the {@code KeyValueStore} SPI and its in-memory implementation.
+ * Storage layer: the {@code KeyValueStore} SPI.
  *
  * <p>
- * This package defines the single pluggable seam of the adapter. A backend implements the
- * {@code KeyValueStore} contract (typed values, per-key TTL, passive and active
- * expiration, key-event callbacks); the bundled in-memory implementation is backed by a
- * {@code ConcurrentHashMap} and is intended for development, single-instance and test
- * usage.
+ * This package defines the single pluggable seam of the adapter, and nothing else. A
+ * backend implements the {@code KeyValueStore} contract (typed values, per-key TTL,
+ * passive and active expiration, key-event callbacks) from its own module, which depends
+ * on this one and nothing more; the bundled in-memory reference backend
+ * ({@code am.ik.redis.adapter.inmemory}) is deliberately a peer of any external backend
+ * rather than a privileged part of the core.
  *
  * <p>
  * This package is null-marked: all types and their members are non-null by default unless
