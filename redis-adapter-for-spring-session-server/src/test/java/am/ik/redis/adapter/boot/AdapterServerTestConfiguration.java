@@ -8,6 +8,8 @@ import am.ik.redis.adapter.store.KeyValueStore;
 
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.env.Environment;
+import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 
 /**
@@ -31,9 +33,31 @@ public class AdapterServerTestConfiguration {
 	/** Sessions are stored under this prefix by Spring Session's defaults. */
 	public static final String SESSION_KEY_PREFIX = "spring:session:sessions:";
 
+	/**
+	 * Prefix of the shadow key whose death is what Spring Session's indexed mode turns
+	 * into a session-deleted or session-expired event.
+	 */
+	public static final String SHADOW_KEY_PREFIX = SESSION_KEY_PREFIX + "expires:";
+
+	/** Prefix of the per-minute set of sessions due to expire, keyed by epoch millis. */
+	public static final String EXPIRATIONS_KEY_PREFIX = "spring:session:expirations:";
+
+	/** Prefix of the set of session ids belonging to one principal. */
+	public static final String PRINCIPAL_INDEX_KEY_PREFIX = "spring:session:index:"
+			+ FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME + ":";
+
+	/**
+	 * Property turning the backend's active-expiry sweeper off, so that a test can prove
+	 * a key dies of the access that touches it rather than of a background sweep.
+	 */
+	public static final String ACTIVE_EXPIRY_PROPERTY = "adapter.test.active-expiry";
+
 	@Bean
-	InMemoryKeyValueStore keyValueStore() {
-		return InMemoryKeyValueStore.builder().sweepInterval(Duration.ofMillis(50)).build();
+	InMemoryKeyValueStore keyValueStore(Environment environment) {
+		return InMemoryKeyValueStore.builder()
+			.sweepInterval(Duration.ofMillis(50))
+			.sweeperEnabled(environment.getProperty(ACTIVE_EXPIRY_PROPERTY, boolean.class, true))
+			.build();
 	}
 
 	@Bean(initMethod = "start", destroyMethod = "stop")
