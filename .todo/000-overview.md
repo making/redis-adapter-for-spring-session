@@ -49,7 +49,7 @@ research; if you need them again, unzip
 
 | # | Title | State |
 |---|---|---|
-| 001 | Multi-module restructure & build setup | not started |
+| 001 | Multi-module restructure & build setup | done |
 | 002 | KeyValueStore SPI + in-memory backend | not started |
 | 003 | RESP protocol codec | not started |
 | 004 | Virtual-thread TCP server + handshake commands | not started |
