@@ -56,7 +56,7 @@ research; if you need them again, unzip
 | 003 | RESP protocol codec | done |
 | 012 | Split the in-memory backend into its own module | done |
 | 004 | Virtual-thread TCP server + handshake commands | done |
-| 005 | Data commands + simple-mode end-to-end | not started |
+| 005 | Data commands + simple-mode end-to-end | done |
 | 006 | Pub/Sub + Set commands + keyspace notifications | not started |
 | 007 | Indexed-mode end-to-end (events + index + cleanup) | not started |
 | 008 | Spring Boot server module (config, lifecycle, actuator) | not started |

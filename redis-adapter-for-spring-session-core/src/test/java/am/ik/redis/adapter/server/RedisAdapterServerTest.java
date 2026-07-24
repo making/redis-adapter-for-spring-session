@@ -8,12 +8,12 @@ import java.util.concurrent.TimeUnit;
 
 import am.ik.redis.adapter.command.CommandDispatcher;
 import am.ik.redis.adapter.command.StandardCommands;
-import am.ik.redis.adapter.store.KeyValueStore;
-import am.ik.redis.adapter.store.StubKeyValueStore;
+import am.ik.redis.adapter.store.FakeKeyValueStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
@@ -25,15 +25,14 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
  */
 class RedisAdapterServerTest {
 
-	private final StubKeyValueStore firstDatabase = new StubKeyValueStore("db0");
+	private final FakeKeyValueStore firstDatabase = new FakeKeyValueStore();
 
-	private final StubKeyValueStore secondDatabase = new StubKeyValueStore("db1");
+	private final FakeKeyValueStore secondDatabase = new FakeKeyValueStore();
 
 	private final RedisAdapterServer server = RedisAdapterServer.builder()
 		.host("127.0.0.1")
 		.port(0)
 		.databases(List.of(this.firstDatabase, this.secondDatabase))
-		.dispatcher(dispatcherWithStoreProbe())
 		.build();
 
 	@BeforeEach
@@ -68,18 +67,26 @@ class RedisAdapterServerTest {
 		}
 	}
 
+	/**
+	 * Each connection carries its own selected database, and the databases are genuinely
+	 * separate keyspaces: what one connection writes after {@code SELECT} is invisible to
+	 * a connection that never selected.
+	 */
 	@Test
 	void servesConnectionsIndependently() throws Exception {
 		try (RawRedisClient first = connect(); RawRedisClient second = connect()) {
 			first.send("SELECT", "1");
 			assertThat(first.readLine()).isEqualTo("+OK");
 
-			first.send("STORE");
-			second.send("STORE");
+			first.send("APPEND", "key", "value");
+			assertThat(first.readLine()).isEqualTo(":5");
 
-			assertThat(first.readLine()).isEqualTo("+db1");
-			assertThat(second.readLine()).isEqualTo("+db0");
+			second.send("EXISTS", "key");
+
+			assertThat(second.readLine()).isEqualTo(":0");
 		}
+		assertThat(this.secondDatabase.exists("key".getBytes(UTF_8))).isTrue();
+		assertThat(this.firstDatabase.exists("key".getBytes(UTF_8))).isFalse();
 	}
 
 	@Test
@@ -120,10 +127,13 @@ class RedisAdapterServerTest {
 			client.send("SELECT", "2");
 			assertThat(client.readLine()).isEqualTo("-ERR DB index is out of range");
 
-			client.send("STORE");
+			client.send("APPEND", "key", "value");
 
-			assertThat(client.readLine()).isEqualTo("+db0");
+			assertThat(client.readLine()).isEqualTo(":5");
 		}
+		// The rejected SELECT left the connection on the database it was already using.
+		assertThat(this.firstDatabase.exists("key".getBytes(UTF_8))).isTrue();
+		assertThat(this.secondDatabase.exists("key".getBytes(UTF_8))).isFalse();
 	}
 
 	@Test
@@ -306,21 +316,6 @@ class RedisAdapterServerTest {
 			catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 			}
-		});
-		return builder.build();
-	}
-
-	/**
-	 * The standard command set plus a probe reporting which backend the connection
-	 * currently resolves to, which is how {@code SELECT} is observed before any data
-	 * command exists.
-	 */
-	private static CommandDispatcher dispatcherWithStoreProbe() {
-		CommandDispatcher.Builder builder = CommandDispatcher.builder();
-		StandardCommands.registerTo(builder);
-		builder.register("STORE", (connection, argv) -> {
-			KeyValueStore store = connection.store();
-			connection.writer().writeSimpleString(((StubKeyValueStore) store).name());
 		});
 		return builder.build();
 	}

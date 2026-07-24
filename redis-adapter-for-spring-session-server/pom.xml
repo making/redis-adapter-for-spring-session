@@ -40,10 +40,16 @@
 		</dependency>
 		<!-- End-to-end compatibility tests drive this server through a real Lettuce client
 		     running stock Spring Session, so both are test-scoped here and never reach the
-		     server's runtime classpath. -->
+		     server's runtime classpath. Spring Session's HTTP configuration is servlet-based,
+		     which is why the web starter is on the test classpath too. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-redis</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>

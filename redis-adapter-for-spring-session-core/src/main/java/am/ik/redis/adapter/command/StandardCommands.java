@@ -31,6 +31,9 @@ public final class StandardCommands {
 	public static void registerTo(CommandDispatcher.Builder builder) {
 		ConnectionCommands.registerTo(builder);
 		ServerCommands.registerTo(builder);
+		KeyCommands.registerTo(builder);
+		StringCommands.registerTo(builder);
+		HashCommands.registerTo(builder);
 	}
 
 }

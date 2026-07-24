@@ -20,6 +20,8 @@ final class TestCommandContext implements CommandContext {
 
 	private final RespWriter writer = new RespWriter(this.replies);
 
+	private @Nullable KeyValueStore store;
+
 	private int databaseIndex;
 
 	private int databaseCount = 2;
@@ -43,11 +45,32 @@ final class TestCommandContext implements CommandContext {
 	}
 
 	/**
+	 * Discards everything written so far, so that a test can set a key up with one
+	 * command and then assert only on the reply of the next.
+	 * @return this context
+	 */
+	TestCommandContext reset() {
+		this.replies.reset();
+		return this;
+	}
+
+	/**
 	 * Reports whether the connection was asked to close.
 	 * @return {@code true} once a handler called {@link #requestClose()}
 	 */
 	boolean isCloseRequested() {
 		return this.closeRequested;
+	}
+
+	/**
+	 * Sets the backend commands run against. Without one, {@link #store()} fails, so a
+	 * test that does not set it cannot silently pass a handler that touches the backend.
+	 * @param store the backend
+	 * @return this context
+	 */
+	TestCommandContext store(KeyValueStore store) {
+		this.store = store;
+		return this;
 	}
 
 	/**
@@ -102,7 +125,11 @@ final class TestCommandContext implements CommandContext {
 
 	@Override
 	public KeyValueStore store() {
-		throw new UnsupportedOperationException("this context has no backend");
+		KeyValueStore store = this.store;
+		if (store == null) {
+			throw new UnsupportedOperationException("this context has no backend");
+		}
+		return store;
 	}
 
 	@Override

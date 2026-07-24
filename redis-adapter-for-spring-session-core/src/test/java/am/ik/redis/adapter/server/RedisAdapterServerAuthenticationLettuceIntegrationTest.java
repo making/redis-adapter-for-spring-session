@@ -5,7 +5,7 @@ import java.util.List;
 
 import am.ik.redis.adapter.command.CommandDispatcher;
 import am.ik.redis.adapter.command.StandardCommands;
-import am.ik.redis.adapter.store.StubKeyValueStore;
+import am.ik.redis.adapter.store.FakeKeyValueStore;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisConnectionException;
 import io.lettuce.core.RedisURI;
@@ -36,7 +36,7 @@ class RedisAdapterServerAuthenticationLettuceIntegrationTest {
 		.serverSocketFactory(this.serverSocketFactory)
 		.dispatcher(this.dispatcher)
 		.password(PASSWORD)
-		.databases(List.of(new StubKeyValueStore("db0")))
+		.databases(List.of(new FakeKeyValueStore()))
 		.build();
 
 	private final RedisClient client = RedisClient.create();
