@@ -11,8 +11,11 @@ import javax.net.ssl.SSLServerSocketFactory;
 import am.ik.redis.adapter.boot.RedisAdapterProperties.Ssl.ClientAuth;
 import am.ik.redis.adapter.server.RedisAdapterServer;
 import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import org.springframework.boot.ssl.SslBundle;
+import org.springframework.boot.ssl.SslBundles;
 import org.springframework.boot.ssl.SslOptions;
 
 /**
@@ -21,35 +24,75 @@ import org.springframework.boot.ssl.SslOptions;
  * nothing else; everything Spring knows about certificates stops here.
  *
  * <p>
- * Sockets are created by the bundle's own {@code SSLContext}, and each one is then given
- * the rest of what the bundle asked for: the ciphers and protocols of its
- * {@link SslOptions}, and whether a client has to present a certificate of its own. Those
- * are per-socket settings the {@code SSLContext} cannot carry, which is why this class
- * exists rather than the context's factory being passed straight through.
+ * Sockets are created by a {@link RotatableSslContext} built from the bundle, and each
+ * one is then given the rest of what the bundle asked for: the ciphers and protocols of
+ * its {@link SslOptions}, and whether a client has to present a certificate of its own.
+ * Those are per-socket settings an {@code SSLContext} cannot carry, which is why this
+ * class exists rather than the context's factory being passed straight through.
  *
  * <p>
- * The context is created once, as this factory is. Certificate material replaced on disk
- * therefore reaches clients when the server is restarted; following a bundle that Spring
- * Boot reloads ({@code SslBundles.addBundleUpdateHandler}) would mean rebinding the
- * listening socket, and is left for later.
+ * Certificate material replaced on disk reaches clients without a restart. Spring Boot
+ * reloads a bundle declared {@code reload-on-update} and reports it through
+ * {@link SslBundles#addBundleUpdateHandler}; {@link #rotate(SslBundle)} is what that
+ * handler calls, and it never fails outwards — material that cannot be read leaves the
+ * certificate that was serving in place, because a port serving a certificate that is
+ * about to expire is worth more than a port serving nothing.
  */
 final class SslBundleServerSocketFactory extends ServerSocketFactory {
 
-	private final SSLServerSocketFactory delegate;
+	private static final Logger logger = LoggerFactory.getLogger(SslBundleServerSocketFactory.class);
 
-	private final SslOptions options;
+	private final String bundleName;
+
+	private final RotatableSslContext sslContext;
+
+	private final SSLServerSocketFactory delegate;
 
 	private final ClientAuth clientAuth;
 
-	/**
-	 * Creates a factory serving the given bundle's certificate.
-	 * @param bundle the certificate, key and trust material to serve
-	 * @param clientAuth what to ask of a client's own certificate
-	 */
-	SslBundleServerSocketFactory(SslBundle bundle, ClientAuth clientAuth) {
-		this.delegate = bundle.createSslContext().getServerSocketFactory();
+	private volatile SslOptions options;
+
+	private SslBundleServerSocketFactory(Builder builder) {
+		String bundleName = builder.bundleName;
+		SslBundle bundle = builder.bundle;
+		if (bundleName == null || bundle == null) {
+			throw new IllegalStateException("a bundle and its name must be set");
+		}
+		this.bundleName = bundleName;
+		this.clientAuth = builder.clientAuth;
+		this.sslContext = new RotatableSslContext(bundle);
+		this.delegate = this.sslContext.serverSocketFactory();
 		this.options = bundle.getOptions();
-		this.clientAuth = clientAuth;
+	}
+
+	/**
+	 * Returns a builder for a factory.
+	 * @return a new builder
+	 */
+	static Builder builder() {
+		return new Builder();
+	}
+
+	/**
+	 * Serves the given bundle's certificate to every client that connects from now on,
+	 * leaving the connections already established alone. Called by Spring Boot when it
+	 * notices the material behind a {@code reload-on-update} bundle has changed.
+	 * @param bundle the bundle as it now reads on disk
+	 */
+	void rotate(SslBundle bundle) {
+		try {
+			this.sslContext.rotate(bundle);
+			this.options = bundle.getOptions();
+			logger.info("SSL bundle '{}' was rotated; clients connecting from now on are served its new certificate",
+					this.bundleName);
+		}
+		catch (RuntimeException e) {
+			// Throwing here would only reach Spring Boot's watcher thread. The port keeps
+			// serving what it was serving, which is the one outcome an operator can still
+			// recover from by fixing the material on disk.
+			logger.error("SSL bundle '{}' was updated but its certificate material could not be loaded; "
+					+ "the certificate served until now is still being served", this.bundleName, e);
+		}
 	}
 
 	@Override
@@ -85,11 +128,12 @@ final class SslBundleServerSocketFactory extends ServerSocketFactory {
 			throw new IllegalStateException(
 					"Expected an SSLServerSocket from the SSL bundle's context but got " + socket.getClass().getName());
 		}
-		String[] ciphers = this.options.getCiphers();
+		SslOptions options = this.options;
+		String[] ciphers = options.getCiphers();
 		if (ciphers != null) {
 			sslSocket.setEnabledCipherSuites(ciphers);
 		}
-		String[] enabledProtocols = this.options.getEnabledProtocols();
+		String[] enabledProtocols = options.getEnabledProtocols();
 		if (enabledProtocols != null) {
 			sslSocket.setEnabledProtocols(enabledProtocols);
 		}
@@ -100,6 +144,63 @@ final class SslBundleServerSocketFactory extends ServerSocketFactory {
 			case NEED -> sslSocket.setNeedClientAuth(true);
 		}
 		return sslSocket;
+	}
+
+	/**
+	 * Builder for an {@link SslBundleServerSocketFactory}.
+	 */
+	static final class Builder {
+
+		private @Nullable String bundleName;
+
+		private @Nullable SslBundle bundle;
+
+		private ClientAuth clientAuth = ClientAuth.NONE;
+
+		private Builder() {
+		}
+
+		/**
+		 * Sets the name the bundle is configured under, which is what a rotation is
+		 * reported against.
+		 * @param bundleName the name of the SSL bundle
+		 * @return this builder
+		 */
+		Builder bundleName(String bundleName) {
+			this.bundleName = bundleName;
+			return this;
+		}
+
+		/**
+		 * Sets the certificate, key and trust material to serve.
+		 * @param bundle the SSL bundle
+		 * @return this builder
+		 */
+		Builder bundle(SslBundle bundle) {
+			this.bundle = bundle;
+			return this;
+		}
+
+		/**
+		 * Sets what to ask of a client's own certificate. The default is
+		 * {@link ClientAuth#NONE}.
+		 * @param clientAuth the client authentication mode
+		 * @return this builder
+		 */
+		Builder clientAuth(ClientAuth clientAuth) {
+			this.clientAuth = clientAuth;
+			return this;
+		}
+
+		/**
+		 * Builds the factory, reading the bundle's material as it does.
+		 * @return a new factory
+		 * @throws IllegalStateException if no bundle or no bundle name was set
+		 */
+		SslBundleServerSocketFactory build() {
+			return new SslBundleServerSocketFactory(this);
+		}
+
 	}
 
 }

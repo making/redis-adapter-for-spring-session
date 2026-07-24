@@ -24,7 +24,8 @@ research; if you need them again, unzip
                                                    └───────────── 008 Spring Boot server module ──┤
                                                                                                   ├─ 013 part 2 (E2E)
                                                                                                   ├─ 009 ZSet (optional)
-                                                                                                  ├─ 010 TLS (SslBundle) ─ 014 native image / container
+                                                                                                  ├─ 010 TLS (SslBundle) ─┬─ 014 native image / container
+                                                                                                  │                       └─ 015 cert rotation (optional)
                                                                                                   └─ 011 docs / README (last, after 009–014)
 ```
 
@@ -79,4 +80,4 @@ research; if you need them again, unzip
 | 010 | TLS via Spring Boot SslBundle | done |
 | 014 | GraalVM native image and container image | not started |
 | 011 | README, docs & tested examples | not started |
-| 015 | Reload the server certificate without a restart (optional) | not started |
+| 015 | Reload the server certificate without a restart (optional) | done |

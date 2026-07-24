@@ -37,7 +37,10 @@ covered by tests.
 3. **Running the server**: `java -jar redis-adapter-for-spring-session-server.jar` with the
    `redis-adapter.*` (or env var) configuration table; the in-memory backend default;
    Docker example if useful. Include TLS: `redis-adapter.ssl.*` referencing a
-   `spring.ssl.bundle.*` bundle (task 010), with a `rediss://` Lettuce client example.
+   `spring.ssl.bundle.*` bundle (task 010), with a `rediss://` Lettuce client example, and
+   say that adding `reload-on-update=true` to that bundle is the whole of certificate
+   rotation — a renewed certificate reaches new clients without a restart and without
+   dropping the connections already open (task 015).
 4. **Supported Spring Session features**: simple vs indexed, session events,
    `findByIndexName`, expiration/cleanup; and the default Set-based expiration store (plus
    sorted-set if 009 shipped).

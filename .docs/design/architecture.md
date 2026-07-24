@@ -257,11 +257,11 @@ integration is split to keep the core dependency-free:
 - **Server (Spring Boot)** — TLS is configured with **Spring Boot's `SslBundle`**
   abstraction, never by hand-loading keystores. The operator defines a bundle under
   `spring.ssl.bundle.*` (JKS/PEM), and `redis-adapter.ssl.bundle=<name>` selects it. The
-  server module resolves the `SslBundle` from `SslBundles`, calls
-  `sslBundle.createSslContext()`, and passes its `getServerSocketFactory()` to
-  `RedisAdapterServer` — wrapped in `SslBundleServerSocketFactory`, which applies what an
-  `SSLContext` cannot carry: the bundle's `SslOptions` (ciphers, enabled protocols) and
-  `redis-adapter.ssl.client-auth` (`none`/`want`/`need`, i.e. mutual TLS), both per socket.
+  server module resolves the `SslBundle` from `SslBundles` and passes
+  `SslBundleServerSocketFactory` to `RedisAdapterServer`. That factory owns the
+  `SSLContext` (see §8.3) and applies what an `SSLContext` cannot carry: the bundle's
+  `SslOptions` (ciphers, enabled protocols) and `redis-adapter.ssl.client-auth`
+  (`none`/`want`/`need`, i.e. mutual TLS), both per socket.
 
 When no bundle is named the server stays plain TCP. `redis-adapter.ssl.enabled` is
 deliberately *unset* by default rather than `false`: naming a bundle is enough to serve
@@ -273,10 +273,42 @@ rather than by `@ConditionalOnProperty`, so that an operator can still choose it
 ahead-of-time compiled image (task 014), where conditions were evaluated as the image was
 built.
 
-The `SSLContext` is built once, with the server. Certificate material replaced on disk
-therefore takes effect on restart; following a bundle Spring Boot reloads
-(`SslBundles.addBundleUpdateHandler`) means rebinding the listening socket and is left for
-later.
+### 8.3 Certificate rotation without a restart
+
+Certificates expire, so they are replaced on disk while the server runs — that is what
+cert-manager, Vault and every other issuer do. A bundle declared
+`spring.ssl.bundle.pem.<name>.reload-on-update=true` is watched by Spring Boot, which
+rebuilds it and reports the new material through `SslBundles.addBundleUpdateHandler`. The
+server module registers a handler there and serves the new certificate to every client
+that connects afterwards. Nothing is restarted and no connection is dropped.
+
+What makes that possible is **where the material is read**, not what is rebuilt. An
+`SSLServerSocket` keeps the `SSLContext` it was created from for as long as it is bound
+and hands it to every connection it accepts, so a second `SSLContext` would mean a second
+listening socket and a port that is briefly unbound. Instead the context is created once,
+over key and trust managers (`RotatableSslContext`) that forward every call to whichever
+material was installed last:
+
+- a **handshake in progress or already finished** has read the material it needs and is
+  never asked again, so an established connection runs to its end on the certificate it
+  was given;
+- the **next client to connect** triggers a fresh call into those managers and is served
+  whatever the last rotation installed.
+
+Two rules make it safe to follow files an issuer is writing:
+
+- A rotation is **all or nothing**. Both the key and the trust material are read before
+  either is installed, so a bundle that has only half landed on disk never produces a
+  mismatched pair.
+- A rotation that **cannot be read leaves the previous material serving**, logged at
+  ERROR with the bundle name (a successful one is logged at INFO). A port serving a
+  certificate that is about to expire is worth more than a port serving nothing, and an
+  operator can still fix the files. The failure is genuinely reachable: Spring Boot's PEM
+  bundles parse lazily, so an unreadable certificate surfaces inside the update handler
+  rather than as the bundle is rebuilt.
+
+Nothing about this reaches the core, and no `redis-adapter.ssl.*` property changes for a
+rotation — the adapter follows whatever bundle it was pointed at.
 
 ## 9. Explicitly out of scope
 

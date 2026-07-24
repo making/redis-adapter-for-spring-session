@@ -5,12 +5,17 @@
 # the repository, and they are trusted by nothing but the tests in this module. Never point
 # a deployment at them.
 #
-# It builds a throwaway CA and signs two certificates with it:
+# It builds a throwaway CA and signs three certificates with it:
 #
 #   ca.crt                 the CA the client trusts and the server verifies client
 #                          certificates against
 #   server.crt/server.key  what the adapter serves, valid for 127.0.0.1 and localhost so
 #                          that a client verifying the host name is satisfied
+#   server-rotated.crt     a renewal of the server certificate: same CA, same subject and
+#   server-rotated.key     same subject alternative names, different key and serial, which
+#                          is what a certificate rotated on disk looks like. The tests
+#                          copy it over the server material and expect the new serial to
+#                          reach the next client (redis-adapter TLS reload)
 #   client.crt/client.key  what a client presents when the server asks for one
 #                          (redis-adapter.ssl.client-auth)
 #
@@ -41,6 +46,17 @@ openssl x509 -req -in "${WORK}/server.csr" -sha256 -days "${DAYS}" \
   -extfile <(printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n') \
   -out server.crt
 
+# The renewal of the server certificate, for the rotation tests. Everything a client
+# verifies is unchanged; only the key and the serial differ, exactly as they do when
+# cert-manager or Vault renews a certificate in place.
+openssl req -newkey rsa:2048 -sha256 -nodes \
+  -keyout server-rotated.key -out "${WORK}/server-rotated.csr" \
+  -subj "/CN=localhost"
+openssl x509 -req -in "${WORK}/server-rotated.csr" -sha256 -days "${DAYS}" \
+  -CA ca.crt -CAkey "${WORK}/ca.key" -CAserial "${WORK}/ca.srl" -CAcreateserial \
+  -extfile <(printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n') \
+  -out server-rotated.crt
+
 # The client certificate, for the mutual-TLS tests.
 openssl req -newkey rsa:2048 -sha256 -nodes \
   -keyout client.key -out "${WORK}/client.csr" \
@@ -50,4 +66,4 @@ openssl x509 -req -in "${WORK}/client.csr" -sha256 -days "${DAYS}" \
   -extfile <(printf 'extendedKeyUsage=clientAuth\n') \
   -out client.crt
 
-echo "Wrote ca.crt, server.crt, server.key, client.crt and client.key to $(pwd)"
+echo "Wrote ca.crt, server.crt, server.key, server-rotated.crt, server-rotated.key, client.crt and client.key to $(pwd)"

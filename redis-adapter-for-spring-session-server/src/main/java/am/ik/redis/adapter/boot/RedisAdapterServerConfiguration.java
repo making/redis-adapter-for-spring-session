@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.ssl.SslBundle;
 import org.springframework.boot.ssl.SslBundles;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -64,6 +63,11 @@ public class RedisAdapterServerConfiguration {
 	/**
 	 * Resolves what the listening socket is created by: the SSL bundle that was named, or
 	 * plain TCP when none was.
+	 *
+	 * <p>
+	 * A bundle the application declared {@code reload-on-update} is followed for as long
+	 * as the server runs, so that a certificate an issuer renews on disk is served to the
+	 * clients that connect after it without anything being restarted.
 	 * @param ssl the transport security settings
 	 * @param sslBundles the certificate material of the application
 	 * @return the factory the server binds its port with
@@ -87,9 +91,14 @@ public class RedisAdapterServerConfiguration {
 			throw new IllegalStateException("redis-adapter.ssl asks for TLS, but this application has no SSL bundles; "
 					+ "define one under spring.ssl.bundle.*");
 		}
-		SslBundle bundle = bundles.getBundle(name);
+		SslBundleServerSocketFactory factory = SslBundleServerSocketFactory.builder()
+			.bundleName(name)
+			.bundle(bundles.getBundle(name))
+			.clientAuth(ssl.clientAuth())
+			.build();
+		bundles.addBundleUpdateHandler(name, factory::rotate);
 		logger.info("Serving TLS from SSL bundle '{}', client authentication {}", name, ssl.clientAuth());
-		return new SslBundleServerSocketFactory(bundle, ssl.clientAuth());
+		return factory;
 	}
 
 	/**

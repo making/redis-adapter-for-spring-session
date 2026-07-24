@@ -70,6 +70,11 @@ can still configure everything through environment variables in either image.
 - Task 010 must not put the TLS wiring behind `@ConditionalOnProperty`; decide inside the
   bean, from the property, so that a native image can still be told to serve TLS. Keystore
   and PEM material also needs resource hints to be readable from the binary.
+- Task 015 (certificate rotation) rides on Spring Boot's own bundle watching — a
+  `WatchService` on a daemon thread, no reflection of ours — and the adapter side is a
+  plain `Consumer<SslBundle>`. Confirm rather than assume that a rotation still reaches
+  the binary: `RedisAdapterServerCertificateRotationTests` is the check, and if it cannot
+  run against a native image it has to be excluded knowingly rather than quietly dropped.
 - Virtual threads are supported on GraalVM for JDK 21 and later; the server uses one per
   connection plus a platform thread for the accept loop.
 - The `KeyValueStore` SPI reflects on nothing today. A future backend that ships a driver
