@@ -58,7 +58,7 @@ class IndexedSessionEndToEndTests {
 	private RedisIndexedSessionRepository sessions;
 
 	@Autowired
-	private KeyValueStore store;
+	private KeyValueStores databases;
 
 	@Autowired
 	private SessionEventRecorder events;
@@ -95,12 +95,12 @@ class IndexedSessionEndToEndTests {
 		Map<String, RedisSession> found = this.sessions.findByIndexNameAndIndexValue(PRINCIPAL_INDEX, "indexed-alice");
 
 		assertThat(found).containsOnlyKeys(saved.getId());
-		assertThat(this.store.exists(principalKey("indexed-alice"))).isTrue();
+		assertThat(store().exists(principalKey("indexed-alice"))).isTrue();
 
 		this.sessions.deleteById(saved.getId());
 
 		assertThat(this.sessions.findByIndexNameAndIndexValue(PRINCIPAL_INDEX, "indexed-alice")).isEmpty();
-		assertThat(this.store.exists(principalKey("indexed-alice"))).isFalse();
+		assertThat(store().exists(principalKey("indexed-alice"))).isFalse();
 	}
 
 	@Test
@@ -112,7 +112,7 @@ class IndexedSessionEndToEndTests {
 		assertThat(this.sessions.findByIndexNameAndIndexValue(PRINCIPAL_INDEX, "moved-from")).isEmpty();
 		assertThat(this.sessions.findByIndexNameAndIndexValue(PRINCIPAL_INDEX, "moved-to"))
 			.containsOnlyKeys(saved.getId());
-		assertThat(this.store.exists(principalKey("moved-from"))).isFalse();
+		assertThat(store().exists(principalKey("moved-from"))).isFalse();
 	}
 
 	/**
@@ -132,7 +132,7 @@ class IndexedSessionEndToEndTests {
 		SessionDeletedEvent event = this.events.awaitEvent(SessionDeletedEvent.class, saved.getId());
 		assertThat(event.<RedisSession>getSession().<String>getAttribute("user")).isEqualTo("alice");
 		assertThat(this.sessions.findById(saved.getId())).isNull();
-		assertThat(this.store.exists(shadowKey(saved.getId()))).isFalse();
+		assertThat(store().exists(shadowKey(saved.getId()))).isFalse();
 
 		this.sessions.deleteById(saved.getId());
 
@@ -156,7 +156,7 @@ class IndexedSessionEndToEndTests {
 		SessionExpiredEvent event = this.events.awaitEvent(SessionExpiredEvent.class, saved.getId());
 
 		assertThat(event.<RedisSession>getSession().<String>getAttribute("user")).isEqualTo("alice");
-		assertThat(this.store.exists(shadowKey(saved.getId()))).isFalse();
+		assertThat(store().exists(shadowKey(saved.getId()))).isFalse();
 		assertThat(this.events.eventsOf(SessionDeletedEvent.class, saved.getId())).isEmpty();
 	}
 
@@ -178,9 +178,9 @@ class IndexedSessionEndToEndTests {
 		assertThat(loaded).isNotNull();
 		assertThat(loaded.<String>getAttribute(PRINCIPAL_INDEX)).isEqualTo("renamed-alice");
 		assertThat(this.sessions.findById(originalId)).isNull();
-		assertThat(this.store.exists(sessionKey(originalId))).isFalse();
-		assertThat(this.store.exists(shadowKey(originalId))).isFalse();
-		assertThat(this.store.exists(shadowKey(newId))).isTrue();
+		assertThat(store().exists(sessionKey(originalId))).isFalse();
+		assertThat(store().exists(shadowKey(originalId))).isFalse();
+		assertThat(store().exists(shadowKey(newId))).isTrue();
 		assertThat(this.sessions.findByIndexNameAndIndexValue(PRINCIPAL_INDEX, "renamed-alice"))
 			.containsOnlyKeys(newId);
 		this.events.assertNoEvent(SessionDeletedEvent.class, originalId, Duration.ofMillis(200));
@@ -196,13 +196,22 @@ class IndexedSessionEndToEndTests {
 	void changingTheSessionIdOfAVanishedSessionIsSwallowed() {
 		RedisSession saved = create(session -> session.setAttribute("user", "alice"));
 		RedisSession loaded = Objects.requireNonNull(this.sessions.findById(saved.getId()));
-		this.store.delete(sessionKey(saved.getId()));
-		this.store.delete(shadowKey(saved.getId()));
+		store().delete(sessionKey(saved.getId()));
+		store().delete(shadowKey(saved.getId()));
 
 		assertThatCode(() -> {
 			loaded.changeSessionId();
 			this.sessions.save(loaded);
 		}).doesNotThrowAnyException();
+	}
+
+	/**
+	 * Returns the backend the application's sessions land in. The application is
+	 * configured with the default database, which is the first of them.
+	 * @return the backend of database 0
+	 */
+	private KeyValueStore store() {
+		return this.databases.database(0);
 	}
 
 	private RedisSession create(Consumer<RedisSession> customizer) {

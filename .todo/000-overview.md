@@ -66,7 +66,7 @@ research; if you need them again, unzip
 | 005 | Data commands + simple-mode end-to-end | done |
 | 006 | Pub/Sub + Set commands + keyspace notifications | done |
 | 007 | Indexed-mode end-to-end (events + index + cleanup) | done |
-| 008 | Spring Boot server module (config, lifecycle, actuator) | not started |
+| 008 | Spring Boot server module (config, lifecycle, actuator) | done |
 | 013 | Non-default namespace and database end-to-end (part 1 before 008, part 2 after) | part 1 done |
 | 009 | ZSet commands for SortedSetRedisSessionExpirationStore (optional) | not started |
 | 010 | TLS via Spring Boot SslBundle | not started |

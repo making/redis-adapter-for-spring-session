@@ -261,11 +261,108 @@ class RedisAdapterServerTest {
 		assertThatIllegalStateException().isThrownBy(this.server::start).withMessage("server is already running");
 	}
 
+	/**
+	 * Binding is separable from accepting so that a container can publish the port the
+	 * server ended up on before anything is served on it.
+	 */
+	@Test
+	void reportsThePortItBoundBeforeItAcceptsAnything() throws Exception {
+		RedisAdapterServer bound = unstartedServer();
+		try {
+			bound.bind();
+
+			assertThat(bound.port()).isPositive();
+			assertThat(bound.isRunning()).isFalse();
+
+			bound.start();
+
+			assertThat(bound.isRunning()).isTrue();
+			try (RawRedisClient client = new RawRedisClient(bound.port())) {
+				client.send("PING");
+
+				assertThat(client.readLine()).isEqualTo("+PONG");
+			}
+		}
+		finally {
+			bound.stop();
+		}
+	}
+
+	@Test
+	void keepsThePortItBoundWhenItStarts() {
+		RedisAdapterServer bound = unstartedServer();
+		try {
+			bound.bind();
+			int boundPort = bound.port();
+
+			bound.start();
+
+			assertThat(bound.port()).isEqualTo(boundPort);
+		}
+		finally {
+			bound.stop();
+		}
+	}
+
+	@Test
+	void releasesAPortItOnlyBound() throws Exception {
+		RedisAdapterServer bound = unstartedServer();
+		bound.bind();
+		int port = bound.port();
+
+		bound.stop();
+
+		RedisAdapterServer reusing = RedisAdapterServer.builder()
+			.host("127.0.0.1")
+			.port(port)
+			.store(this.firstDatabase)
+			.build();
+		try {
+			reusing.start();
+			try (RawRedisClient client = new RawRedisClient(port)) {
+				client.send("PING");
+
+				assertThat(client.readLine()).isEqualTo("+PONG");
+			}
+		}
+		finally {
+			reusing.stop();
+		}
+	}
+
+	@Test
+	void rejectsBeingBoundTwice() {
+		assertThatIllegalStateException().isThrownBy(this.server::bind).withMessage("server is already bound");
+	}
+
 	@Test
 	void hasNoPortWhileItIsStopped() {
 		this.server.stop();
 
-		assertThatIllegalStateException().isThrownBy(this.server::port).withMessage("server is not running");
+		assertThatIllegalStateException().isThrownBy(this.server::port).withMessage("server is not bound");
+	}
+
+	/**
+	 * The connection counts are what a metrics binder reports: how many clients are being
+	 * served right now, and how many have been accepted since the server was built.
+	 */
+	@Test
+	void countsTheConnectionsItServes() throws Exception {
+		assertThat(this.server.activeConnections()).isZero();
+		assertThat(this.server.totalConnections()).isZero();
+
+		try (RawRedisClient first = connect(); RawRedisClient second = connect()) {
+			first.send("PING");
+			assertThat(first.readLine()).isEqualTo("+PONG");
+			second.send("PING");
+			assertThat(second.readLine()).isEqualTo("+PONG");
+
+			assertThat(this.server.activeConnections()).isEqualTo(2);
+			assertThat(this.server.totalConnections()).isEqualTo(2);
+		}
+
+		awaitActiveConnections(0);
+		assertThat(this.server.totalConnections()).as("accepted connections are never forgotten").isEqualTo(2);
 	}
 
 	@Test
@@ -285,6 +382,27 @@ class RedisAdapterServerTest {
 
 	private RawRedisClient connect() throws IOException {
 		return new RawRedisClient(this.server.port());
+	}
+
+	/**
+	 * A second server on its own ephemeral port that has neither been bound nor started,
+	 * so that a test can drive its lifecycle from the beginning.
+	 */
+	private RedisAdapterServer unstartedServer() {
+		return RedisAdapterServer.builder().host("127.0.0.1").port(0).store(this.firstDatabase).build();
+	}
+
+	/**
+	 * Waits for the serving threads to notice that their clients have gone. A connection
+	 * is dropped by the thread that served it, so the count falls a moment after the
+	 * client closes rather than as it closes.
+	 */
+	private void awaitActiveConnections(int expected) throws InterruptedException {
+		long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+		while (this.server.activeConnections() != expected && System.nanoTime() < deadline) {
+			Thread.sleep(10);
+		}
+		assertThat(this.server.activeConnections()).isEqualTo(expected);
 	}
 
 	/**

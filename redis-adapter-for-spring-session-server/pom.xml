@@ -33,23 +33,29 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
+		<!-- The actuator is only reachable if something serves HTTP. This port carries the
+		     health and metrics endpoints and nothing else; the sessions are served over RESP
+		     on a port of their own. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-resttestclient</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<!-- End-to-end compatibility tests drive this server through a real Lettuce client
 		     running stock Spring Session, so both are test-scoped here and never reach the
-		     server's runtime classpath. Spring Session's HTTP configuration is servlet-based,
-		     which is why the web starter is on the test classpath too. -->
+		     server's runtime classpath. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-data-redis</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-web</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
@@ -69,6 +75,25 @@
 			<plugin>
 				<groupId>io.spring.javaformat</groupId>
 				<artifactId>spring-javaformat-maven-plugin</artifactId>
+			</plugin>
+			<!-- The runnable server is attached under the "exec" classifier so that the plain
+			     jar stays a jar: its configuration classes are also usable from an application
+			     that would rather run the adapter inside itself. -->
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+				<version>${spring-boot.version}</version>
+				<configuration>
+					<classifier>exec</classifier>
+					<mainClass>am.ik.redis.adapter.boot.RedisAdapterServerApplication</mainClass>
+				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<goal>repackage</goal>
+						</goals>
+					</execution>
+				</executions>
 			</plugin>
 		</plugins>
 	</build>

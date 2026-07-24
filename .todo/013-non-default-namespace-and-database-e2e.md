@@ -77,10 +77,19 @@ watching the two database-1 tests go red on the channel name.
    the Spring Session test below would only say "no event arrived". Fix whatever it
    surfaces, with a regression test for each.
 
-### Part 2 — after 008
+### Part 2 — after 008 (008 is done; this is what it left you)
+- `redis-adapter.databases=2` is the property that makes the server serve database 1; set
+  it with `@SpringBootTest(properties = ...)` on the new test class.
+- `AdapterServerTestConfiguration` now imports the shipped configuration
+  (`KeyValueStoreConfiguration` + `RedisAdapterServerConfiguration`), so there is nothing
+  to build: the harness already serves whatever `databases` says.
+- The backends are one `KeyValueStores` bean, not one `KeyValueStore` bean per store.
+  A test asserts on `databases.database(1)`, and `databases.database(0)` is the one that
+  must stay empty.
+
 2. Let the test harness serve more than one database, through 008's `databases`
    configuration property rather than a bespoke `@TestConfiguration`. The `KeyValueStore`
-   bean a test asserts on must then be the one for the database under test.
+   a test asserts on must then be the one for the database under test.
 3. An E2E test in the server module: `@EnableRedisIndexedHttpSession(redisNamespace = ...)`
    plus `spring.data.redis.database=1`, asserting created / deleted / expired events and
    `findByIndexNameAndIndexValue`, with the key names checked against the custom namespace
@@ -99,10 +108,10 @@ watching the two database-1 tests go red on the channel name.
   Session's channel names agree. Setting one without the other is itself a case worth a
   thought: they cannot disagree through this configuration path.
 - The adapter's `CONFIG` handling is database-independent and needs nothing here.
-- The Boot module currently declares a single `KeyValueStore` bean. Whether a deployed
-  server can serve several databases is task 008's decision — which is why part 2 waits for
-  it. Part 1 needs none of that: it drives the core server directly, as the existing core
-  integration tests do.
+- Whether a deployed server can serve several databases was task 008's decision — which is
+  why part 2 waits for it. It decided yes: `redis-adapter.databases` creates one backend
+  per database. Part 1 needed none of that: it drives the core server directly, as the
+  existing core integration tests do.
 - Keep the assertion on the channel *name* rather than only on the Spring Session event: an
   event that fails to arrive is the symptom of a dozen possible faults, and the point of
   this task is to pin down one of them.

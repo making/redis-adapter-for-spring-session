@@ -3,11 +3,16 @@
  *
  * <p>
  * This module intentionally depends on Spring Boot: the "no external dependencies" rule
- * applies to the reusable core, not to the runnable server. It will bind configuration
- * properties (bind address, port, backend selection, default TTL, optional auth, TLS
- * bundle), start and stop the core {@code RedisAdapterServer} through a lifecycle bean,
- * and expose actuator health and metrics. This base package currently holds only the
- * application entry point.
+ * applies to the reusable core, not to the runnable server. It binds the configuration
+ * properties (bind address, port, backend selection, optional password, database count,
+ * TLS bundle), creates one backend per database, starts and stops the core
+ * {@code RedisAdapterServer} through a lifecycle bean, and exposes actuator health and
+ * metrics.
+ *
+ * <p>
+ * Nothing here speaks about sessions. The server answers RESP, and it is the application
+ * on the other end of the socket that runs Spring Session; that application needs neither
+ * this module nor any other part of this project on its classpath.
  *
  * <p>
  * This package is null-marked: all types and their members are non-null by default unless

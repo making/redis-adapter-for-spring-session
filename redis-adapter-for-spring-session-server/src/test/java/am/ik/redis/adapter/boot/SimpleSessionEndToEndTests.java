@@ -27,9 +27,9 @@ import static org.awaitility.Awaitility.await;
  * cannot tell the difference.
  *
  * <p>
- * Assertions on the backend are made through the {@link KeyValueStore} bean, which pins
- * down the key format that actually reached storage rather than trusting the round trip
- * alone.
+ * Assertions on the backend are made through the {@link KeyValueStore} the server writes
+ * to, which pins down the key format that actually reached storage rather than trusting
+ * the round trip alone.
  */
 @SpringBootTest(classes = SimpleSessionEndToEndTests.SessionApplication.class)
 class SimpleSessionEndToEndTests {
@@ -38,7 +38,7 @@ class SimpleSessionEndToEndTests {
 	private SessionRepository<? extends Session> sessions;
 
 	@Autowired
-	private KeyValueStore store;
+	private KeyValueStores databases;
 
 	/**
 	 * Timestamps are compared in epoch milliseconds because that is the precision Spring
@@ -61,7 +61,7 @@ class SimpleSessionEndToEndTests {
 		assertThat(loaded.getCreationTime().toEpochMilli()).isEqualTo(saved.getCreationTime().toEpochMilli());
 		assertThat(loaded.getLastAccessedTime().toEpochMilli()).isEqualTo(saved.getLastAccessedTime().toEpochMilli());
 		assertThat(loaded.getMaxInactiveInterval()).isEqualTo(saved.getMaxInactiveInterval());
-		assertThat(this.store.exists(sessionKey(saved.getId()))).isTrue();
+		assertThat(store().exists(sessionKey(saved.getId()))).isTrue();
 	}
 
 	@Test
@@ -91,7 +91,7 @@ class SimpleSessionEndToEndTests {
 		this.sessions.deleteById(saved.getId());
 
 		assertThat(this.sessions.findById(saved.getId())).isNull();
-		assertThat(this.store.exists(sessionKey(saved.getId()))).isFalse();
+		assertThat(store().exists(sessionKey(saved.getId()))).isFalse();
 	}
 
 	/**
@@ -110,8 +110,8 @@ class SimpleSessionEndToEndTests {
 		assertThat(loaded).isNotNull();
 		assertThat(loaded.<String>getAttribute("user")).isEqualTo("alice");
 		assertThat(this.sessions.findById(originalId)).isNull();
-		assertThat(this.store.exists(sessionKey(originalId))).isFalse();
-		assertThat(this.store.exists(sessionKey(newId))).isTrue();
+		assertThat(store().exists(sessionKey(originalId))).isFalse();
+		assertThat(store().exists(sessionKey(newId))).isTrue();
 	}
 
 	@Test
@@ -123,8 +123,17 @@ class SimpleSessionEndToEndTests {
 
 		await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
 			assertThat(this.sessions.findById(saved.getId())).isNull();
-			assertThat(this.store.exists(sessionKey(saved.getId()))).isFalse();
+			assertThat(store().exists(sessionKey(saved.getId()))).isFalse();
 		});
+	}
+
+	/**
+	 * Returns the backend the application's sessions land in. The application is
+	 * configured with the default database, which is the first of them.
+	 * @return the backend of database 0
+	 */
+	private KeyValueStore store() {
+		return this.databases.database(0);
 	}
 
 	private Session create(Consumer<Session> customizer) {

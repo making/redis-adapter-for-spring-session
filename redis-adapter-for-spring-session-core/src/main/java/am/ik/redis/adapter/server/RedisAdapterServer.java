@@ -55,6 +55,12 @@ import org.slf4j.LoggerFactory;
  * }</pre>
  *
  * <p>
+ * {@link #start()} both binds the port and begins accepting on it. A caller that has to
+ * know the port before anything is served — a container publishing it to the rest of an
+ * application, most of all when the server was asked for an ephemeral port — can split
+ * the two by calling {@link #bind()} first.
+ *
+ * <p>
  * By default the server is open: every client that can reach the port can read and write
  * every session. Give it a password to change that:
  *
@@ -110,7 +116,7 @@ public final class RedisAdapterServer implements AutoCloseable {
 
 	private volatile boolean running;
 
-	private @Nullable ServerSocket serverSocket;
+	private volatile @Nullable ServerSocket serverSocket;
 
 	private @Nullable ExecutorService connectionExecutor;
 
@@ -140,8 +146,38 @@ public final class RedisAdapterServer implements AutoCloseable {
 	}
 
 	/**
-	 * Binds the listening socket and starts accepting connections. The socket is bound
-	 * before this method returns, so {@link #port()} is meaningful as soon as it does.
+	 * Binds the listening socket without accepting anything on it yet, so that
+	 * {@link #port()} is known before a single client is served. {@link #start()} does
+	 * this itself when the server is not bound already; call it separately when the port
+	 * has to be published to something else first — a container handing it to the rest of
+	 * an application, say.
+	 *
+	 * <p>
+	 * A client may connect to a socket that is only bound; the connection waits in the
+	 * accept queue until {@link #start()} picks it up. {@link #stop()} releases the port
+	 * whether or not the server ever started accepting.
+	 * @throws IllegalStateException if the server is already bound
+	 * @throws UncheckedIOException if the socket cannot be bound
+	 */
+	public void bind() {
+		this.lifecycleLock.lock();
+		try {
+			if (this.serverSocket != null) {
+				throw new IllegalStateException("server is already bound");
+			}
+			ServerSocket socket = bindSocket();
+			this.serverSocket = socket;
+			logger.info("Redis adapter server bound to {}", socket.getLocalSocketAddress());
+		}
+		finally {
+			this.lifecycleLock.unlock();
+		}
+	}
+
+	/**
+	 * Starts accepting connections, binding the listening socket first if {@link #bind()}
+	 * has not already done so. The socket is bound before this method returns, so
+	 * {@link #port()} is meaningful as soon as it does.
 	 * @throws IllegalStateException if the server is already running
 	 * @throws UncheckedIOException if the socket cannot be bound
 	 */
@@ -151,7 +187,8 @@ public final class RedisAdapterServer implements AutoCloseable {
 			if (this.running) {
 				throw new IllegalStateException("server is already running");
 			}
-			ServerSocket socket = bind();
+			ServerSocket bound = this.serverSocket;
+			ServerSocket socket = (bound != null) ? bound : bindSocket();
 			ExecutorService executor = Executors
 				.newThreadPerTaskExecutor(Thread.ofVirtual().name("redis-adapter-connection-", 1).factory());
 			this.serverSocket = socket;
@@ -171,15 +208,16 @@ public final class RedisAdapterServer implements AutoCloseable {
 	}
 
 	/**
-	 * Stops accepting connections, closes the connections already established, and waits
-	 * for their threads to finish. A connection still executing a command after the
-	 * shutdown timeout is interrupted, so this always returns. Doing nothing if the
-	 * server is not running, so it is safe to call more than once.
+	 * Stops accepting connections, releases the port, closes the connections already
+	 * established, and waits for their threads to finish. A connection still executing a
+	 * command after the shutdown timeout is interrupted, so this always returns. Doing
+	 * nothing if the server is neither bound nor running, so it is safe to call more than
+	 * once.
 	 */
 	public void stop() {
 		this.lifecycleLock.lock();
 		try {
-			if (!this.running) {
+			if (!this.running && this.serverSocket == null) {
 				return;
 			}
 			this.running = false;
@@ -214,12 +252,12 @@ public final class RedisAdapterServer implements AutoCloseable {
 	 * Returns the port the server is listening on, which is the actual port when it was
 	 * asked to bind an ephemeral one.
 	 * @return the bound port
-	 * @throws IllegalStateException if the server is not running
+	 * @throws IllegalStateException if the server is not bound
 	 */
 	public int port() {
 		ServerSocket socket = this.serverSocket;
 		if (socket == null) {
-			throw new IllegalStateException("server is not running");
+			throw new IllegalStateException("server is not bound");
 		}
 		return socket.getLocalPort();
 	}
@@ -232,7 +270,24 @@ public final class RedisAdapterServer implements AutoCloseable {
 		return this.running;
 	}
 
-	private ServerSocket bind() {
+	/**
+	 * Returns how many client connections are being served at this moment.
+	 * @return the number of live connections
+	 */
+	public int activeConnections() {
+		return this.connections.size();
+	}
+
+	/**
+	 * Returns how many client connections have been accepted since this server was built,
+	 * including those that have since ended. The count survives a stop and start.
+	 * @return the number of connections accepted so far
+	 */
+	public long totalConnections() {
+		return this.connectionIds.get();
+	}
+
+	private ServerSocket bindSocket() {
 		try {
 			InetAddress bindAddress = (this.host != null) ? InetAddress.getByName(this.host) : null;
 			return this.serverSocketFactory.createServerSocket(this.port, this.backlog, bindAddress);

@@ -52,7 +52,7 @@ class IndexedSessionCleanupEndToEndTests {
 	private RedisIndexedSessionRepository sessions;
 
 	@Autowired
-	private KeyValueStore store;
+	private KeyValueStores databases;
 
 	@Autowired
 	private SessionEventRecorder events;
@@ -65,10 +65,10 @@ class IndexedSessionCleanupEndToEndTests {
 		this.sessions.save(saved);
 
 		byte[] shadowKey = shadowKey(saved.getId());
-		long expireAt = Objects.requireNonNull(this.store.getExpireAt(shadowKey), "the shadow key carries no expiry");
+		long expireAt = Objects.requireNonNull(store().getExpireAt(shadowKey), "the shadow key carries no expiry");
 		// Waiting on the store's own clock rather than on the store's contents: reading a
 		// key is what the test is about, and doing it early would expire the key itself.
-		await().atMost(Duration.ofSeconds(10)).until(() -> this.store.currentTimeMillis() > expireAt);
+		await().atMost(Duration.ofSeconds(10)).until(() -> store().currentTimeMillis() > expireAt);
 		assertThat(this.events.eventsOf(SessionExpiredEvent.class, saved.getId()))
 			.as("nothing may notice the expiry before the cleanup job touches the key")
 			.isEmpty();
@@ -79,7 +79,7 @@ class IndexedSessionCleanupEndToEndTests {
 
 		SessionExpiredEvent event = this.events.awaitEvent(SessionExpiredEvent.class, saved.getId());
 		assertThat(event.<RedisSession>getSession().<String>getAttribute("user")).isEqualTo("alice");
-		assertThat(this.store.exists(shadowKey)).isFalse();
+		assertThat(store().exists(shadowKey)).isFalse();
 	}
 
 	/**
@@ -93,11 +93,20 @@ class IndexedSessionCleanupEndToEndTests {
 	 */
 	private void fileUnderTheMinutesTheCleanupJobWillRead(String sessionId) {
 		RedisOperations<String, Object> redis = this.sessions.getSessionRedisOperations();
-		long minute = truncateToMinute(this.store.currentTimeMillis());
+		long minute = truncateToMinute(store().currentTimeMillis());
 		for (long bucket : new long[] { minute, minute + MILLIS_PER_MINUTE }) {
 			redis.boundSetOps(AdapterServerTestConfiguration.EXPIRATIONS_KEY_PREFIX + bucket)
 				.add("expires:" + sessionId);
 		}
+	}
+
+	/**
+	 * Returns the backend the application's sessions land in. The application is
+	 * configured with the default database, which is the first of them.
+	 * @return the backend of database 0
+	 */
+	private KeyValueStore store() {
+		return this.databases.database(0);
 	}
 
 	private static long truncateToMinute(long epochMilli) {
