@@ -12,9 +12,22 @@ one place where a wrong name fails silently: no error is raised, the event simpl
 arrives, and the application sees sessions that are never reported as expired.
 
 ## Depends on
-007 (the indexed E2E harness), 004 (`SELECT` and the multi-database server). Independent of
-008, though if 008 makes the number of databases configurable this test is the natural
-consumer of that.
+007 (the indexed E2E harness), 004 (`SELECT` and the multi-database server).
+
+## Ordering — do this in two parts, around 008
+This task straddles 008, so **split it rather than doing it in one sitting**:
+
+- **Part 1 (before 008)** — the raw-protocol test in the core module, step 1 below. It
+  needs no Spring Boot and no configuration, it is the part that actually catches the
+  silent failure, and there is nothing to gain by waiting for 008.
+- **Part 2 (after 008)** — the harness and the Spring Session E2E, steps 2-4 below. 008
+  already owns the `databases` count as a configuration property (see its step 1, which
+  binds `RedisAdapterServer.Builder.databases(List<KeyValueStore>)`), so writing the
+  multi-database test harness first would mean building a `@TestConfiguration` that 008
+  then makes redundant. Build part 2 on 008's real property instead.
+
+Keeping the two apart also keeps failure attribution sharp: with part 1 already green, a
+failure in part 2 is the new Boot wiring rather than the adapter's keyspace handling.
 
 ## Goal
 An automated E2E test where a stock Spring Session application configured with a custom
@@ -49,15 +62,19 @@ deleted / expired events and principal-index lookups as it does on the defaults.
    single-database default is unaffected.
 
 ## Steps / deliverables
-1. Let the test harness serve more than one database: either extend
-   `AdapterServerTestConfiguration` to build a list of stores and pass
-   `RedisAdapterServer.builder().databases(...)`, or add a sibling configuration for it.
-   The `KeyValueStore` bean a test asserts on must then be the one for the database under
-   test.
-2. A raw-protocol test (core module, alongside the existing Lettuce integration tests) that
+
+### Part 1 — before 008
+1. A raw-protocol test (core module, alongside the existing Lettuce integration tests) that
    subscribes to `__keyevent@1__:expired` and asserts a key expiring on database 1 arrives
-   there and *not* on `__keyevent@0__:expired`. This is the assertion that names the
-   failing layer; the Spring Session test below would only say "no event arrived".
+   there and *not* on `__keyevent@0__:expired`, plus the `SELECT` routing that puts the key
+   in the second store to begin with. This is the assertion that names the failing layer;
+   the Spring Session test below would only say "no event arrived". Fix whatever it
+   surfaces, with a regression test for each.
+
+### Part 2 — after 008
+2. Let the test harness serve more than one database, through 008's `databases`
+   configuration property rather than a bespoke `@TestConfiguration`. The `KeyValueStore`
+   bean a test asserts on must then be the one for the database under test.
 3. An E2E test in the server module: `@EnableRedisIndexedHttpSession(redisNamespace = ...)`
    plus `spring.data.redis.database=1`, asserting created / deleted / expired events and
    `findByIndexNameAndIndexValue`, with the key names checked against the custom namespace
@@ -77,8 +94,9 @@ deleted / expired events and principal-index lookups as it does on the defaults.
   thought: they cannot disagree through this configuration path.
 - The adapter's `CONFIG` handling is database-independent and needs nothing here.
 - The Boot module currently declares a single `KeyValueStore` bean. Whether a deployed
-  server can serve several databases is task 008's decision; this task only needs the test
-  harness to serve two.
+  server can serve several databases is task 008's decision — which is why part 2 waits for
+  it. Part 1 needs none of that: it drives the core server directly, as the existing core
+  integration tests do.
 - Keep the assertion on the channel *name* rather than only on the Spring Session event: an
   event that fails to arrive is the symptom of a dozen possible faults, and the point of
   this task is to pin down one of them.
