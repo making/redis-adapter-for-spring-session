@@ -58,20 +58,57 @@ class ServerCommandsTest {
 		assertThat(this.context.replies()).isEqualTo("*0\r\n");
 	}
 
+	/**
+	 * Spring Session reads this parameter before it subscribes and refuses to start if
+	 * the reply is an error. The adapter always emits keyspace events, so it reports the
+	 * flags that say so — which also spares the client the follow-up {@code CONFIG SET}.
+	 */
 	@Test
-	void configGetReportsNoParameters() throws Exception {
+	void configGetAnswersTheKeyspaceNotificationFlags() throws Exception {
 		dispatch("CONFIG", "GET", "notify-keyspace-events");
 
-		assertThat(this.context.replies()).isEqualTo("*0\r\n");
+		assertThat(this.context.replies()).isEqualTo("""
+				*2\r
+				$22\r
+				notify-keyspace-events\r
+				$3\r
+				Egx\r
+				""");
 	}
 
 	@Test
-	void configGetReportsNoParametersInResp3() throws Exception {
+	void configGetAnswersAMapInResp3() throws Exception {
 		this.context.protocolVersion(RespVersion.RESP3);
 
 		dispatch("CONFIG", "GET", "notify-keyspace-events");
 
-		assertThat(this.context.replies()).isEqualTo("%0\r\n");
+		assertThat(this.context.replies()).isEqualTo("""
+				%1\r
+				$22\r
+				notify-keyspace-events\r
+				$3\r
+				Egx\r
+				""");
+	}
+
+	@Test
+	void configGetMatchesParameterNamesAsAGlob() throws Exception {
+		dispatch("CONFIG", "GET", "notify-*");
+
+		assertThat(this.context.replies()).isEqualTo("""
+				*2\r
+				$22\r
+				notify-keyspace-events\r
+				$3\r
+				Egx\r
+				""");
+	}
+
+	@Test
+	void configGetOfAParameterTheAdapterDoesNotKeepIsEmptyRatherThanAnError() throws Exception {
+		dispatch("CONFIG", "GET", "maxmemory");
+
+		assertThat(this.context.replies()).isEqualTo("*0\r\n");
 	}
 
 	@Test
@@ -79,6 +116,34 @@ class ServerCommandsTest {
 		dispatch("CONFIG", "SET", "notify-keyspace-events", "gxE");
 
 		assertThat(this.context.replies()).isEqualTo("+OK\r\n");
+	}
+
+	/**
+	 * The value is remembered so a client reading it back sees what it wrote, but it
+	 * never changes behaviour: the adapter emits the {@code del} and {@code expired}
+	 * events Spring Session needs whatever the flags say.
+	 */
+	@Test
+	void configSetIsRememberedForTheWholeServer() throws Exception {
+		dispatch("CONFIG", "SET", "notify-keyspace-events", "KEA");
+		this.context.reset();
+
+		dispatch("CONFIG", "GET", "notify-keyspace-events");
+
+		assertThat(this.context.replies()).isEqualTo("""
+				*2\r
+				$22\r
+				notify-keyspace-events\r
+				$3\r
+				KEA\r
+				""");
+	}
+
+	@Test
+	void configSetNeedsAValueForEveryParameter() throws Exception {
+		dispatch("CONFIG", "SET", "notify-keyspace-events");
+
+		assertThat(this.context.replies()).isEqualTo("-ERR wrong number of arguments for 'config|set' command\r\n");
 	}
 
 	@Test

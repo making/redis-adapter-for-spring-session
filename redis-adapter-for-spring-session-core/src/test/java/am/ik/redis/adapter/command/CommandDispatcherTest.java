@@ -1,5 +1,6 @@
 package am.ik.redis.adapter.command;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import am.ik.redis.adapter.store.TypeMismatchException;
@@ -113,12 +114,58 @@ class CommandDispatcherTest {
 	void runsACommandRegisteredAsUnauthenticatedBeforeAnyCredentials() throws Exception {
 		TestCommandContext protectedContext = new TestCommandContext().authenticator(Authenticator.password("s3cret"));
 		CommandDispatcher dispatcher = CommandDispatcher.builder()
-			.registerUnauthenticated("HELLO", (connection, argv) -> connection.writer().writeSimpleString("RAN"))
+			.register("HELLO", (connection, argv) -> connection.writer().writeSimpleString("RAN"),
+					CommandAvailability.UNAUTHENTICATED)
 			.build();
 
 		dispatcher.dispatch(protectedContext, argv("HELLO"));
 
 		assertThat(protectedContext.replies()).isEqualTo("+RAN\r\n");
+	}
+
+	@Test
+	void refusesACommandThatIsNotAvailableWhileTheConnectionIsSubscribed() throws Exception {
+		CommandDispatcher dispatcher = dispatcherFor(
+				(connection, argv) -> connection.writer().writeSimpleString("RAN"));
+		subscribe(this.context);
+
+		dispatcher.dispatch(this.context, argv("PING"));
+
+		assertThat(this.context.replies()).isEqualTo("-ERR Can't execute 'ping': only (P|S)SUBSCRIBE / "
+				+ "(P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n");
+	}
+
+	@Test
+	void runsACommandRegisteredAsAvailableWhileSubscribed() throws Exception {
+		CommandDispatcher dispatcher = CommandDispatcher.builder()
+			.register("PING", (connection, argv) -> connection.writer().writeSimpleString("RAN"),
+					CommandAvailability.WHILE_SUBSCRIBED)
+			.build();
+		subscribe(this.context);
+
+		dispatcher.dispatch(this.context, argv("PING"));
+
+		assertThat(this.context.replies()).isEqualTo("+RAN\r\n");
+	}
+
+	/**
+	 * A connection that has not authenticated cannot have subscribed, so it must hear
+	 * about the credentials it is missing rather than about subscriber mode.
+	 */
+	@Test
+	void checksAuthenticationBeforeSubscriberMode() throws Exception {
+		TestCommandContext protectedContext = new TestCommandContext().authenticator(Authenticator.password("s3cret"));
+		CommandDispatcher dispatcher = dispatcherFor(
+				(connection, argv) -> connection.writer().writeSimpleString("RAN"));
+		subscribe(protectedContext);
+
+		dispatcher.dispatch(protectedContext, argv("PING"));
+
+		assertThat(protectedContext.replies()).isEqualTo("-NOAUTH Authentication required.\r\n");
+	}
+
+	private static void subscribe(TestCommandContext context) {
+		context.pubSub().subscribe(context.subscriber(), "news".getBytes(StandardCharsets.UTF_8));
 	}
 
 	@Test

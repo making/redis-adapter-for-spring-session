@@ -22,6 +22,8 @@ import javax.net.ServerSocketFactory;
 import am.ik.redis.adapter.command.Authenticator;
 import am.ik.redis.adapter.command.CommandDispatcher;
 import am.ik.redis.adapter.command.StandardCommands;
+import am.ik.redis.adapter.pubsub.KeyspaceNotifier;
+import am.ik.redis.adapter.pubsub.PubSubRegistry;
 import am.ik.redis.adapter.store.KeyValueStore;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -64,6 +66,13 @@ import org.slf4j.LoggerFactory;
  * command but the handshake is refused with {@code NOAUTH}. The password itself crosses
  * the network in clear text unless the server is also given an
  * {@code SSLServerSocketFactory}, so a password and TLS belong together.
+ *
+ * <h2>Keyspace notifications</h2> The server owns one {@link PubSubRegistry} shared by
+ * all of its connections, and <strong>building</strong> it attaches a
+ * {@link KeyspaceNotifier} to every backend it was given, so that a key removed by any
+ * means is published as {@code __keyevent@<db>__:del} or {@code :expired}. Because the
+ * listener is attached once and a backend offers no way to detach one, a backend belongs
+ * to a single server.
  */
 public final class RedisAdapterServer implements AutoCloseable {
 
@@ -91,6 +100,8 @@ public final class RedisAdapterServer implements AutoCloseable {
 
 	private final List<KeyValueStore> databases;
 
+	private final PubSubRegistry pubSubRegistry = new PubSubRegistry();
+
 	private final Set<ClientConnection> connections = ConcurrentHashMap.newKeySet();
 
 	private final AtomicLong connectionIds = new AtomicLong();
@@ -114,6 +125,10 @@ public final class RedisAdapterServer implements AutoCloseable {
 		this.dispatcher = (builder.dispatcher != null) ? builder.dispatcher : StandardCommands.dispatcher();
 		this.authenticator = builder.authenticator;
 		this.databases = List.copyOf(builder.databases);
+		for (int databaseIndex = 0; databaseIndex < this.databases.size(); databaseIndex++) {
+			this.databases.get(databaseIndex)
+				.addKeyEventListener(new KeyspaceNotifier(this.pubSubRegistry, databaseIndex));
+		}
 	}
 
 	/**
@@ -255,6 +270,7 @@ public final class RedisAdapterServer implements AutoCloseable {
 				.dispatcher(this.dispatcher)
 				.databases(this.databases)
 				.authenticator(this.authenticator)
+				.pubSubRegistry(this.pubSubRegistry)
 				.id(this.connectionIds.incrementAndGet())
 				.build();
 		}

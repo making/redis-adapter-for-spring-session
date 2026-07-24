@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import am.ik.redis.adapter.store.TypeMismatchException;
 import org.slf4j.Logger;
@@ -21,12 +22,13 @@ import org.slf4j.LoggerFactory;
  * discovered.
  *
  * <p>
- * The dispatcher is also where authentication is enforced: a command registered with
- * {@link Builder#register} is answered with {@code NOAUTH Authentication required.} until
- * the connection has authenticated, so no handler has to check for itself. The handshake
- * commands a client needs in order to authenticate at all are registered with
- * {@link Builder#registerUnauthenticated} instead. An unknown command is reported as
- * unknown even to a connection that has not authenticated, matching Redis.
+ * The dispatcher is also where the two rules about <em>when</em> a command may run are
+ * enforced, so that no handler has to check for itself. A command is answered
+ * {@code NOAUTH Authentication required.} until the connection has authenticated, and a
+ * connection that has subscribed is refused everything but the pub/sub commands and
+ * {@code PING} / {@code QUIT}. Both are relaxed per command with
+ * {@link CommandAvailability}. An unknown command is reported as unknown even to a
+ * connection that has not authenticated, matching Redis.
  *
  * <p>
  * Every failure mode ends in a reply rather than a broken connection: a
@@ -45,6 +47,10 @@ public final class CommandDispatcher {
 	private static final String WRONG_TYPE = "WRONGTYPE Operation against a key holding the wrong kind of value";
 
 	private static final String NO_AUTH = "NOAUTH Authentication required.";
+
+	/** What Redis answers a subscribed connection that sends anything else. */
+	private static final String ONLY_PUB_SUB = "only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET "
+			+ "are allowed in this context";
 
 	private final Map<String, Command> commands;
 
@@ -83,6 +89,11 @@ public final class CommandDispatcher {
 			context.writer().writeError(NO_AUTH);
 			return;
 		}
+		if (!command.availableWhileSubscribed() && context.pubSub().isSubscribed(context.subscriber())) {
+			logger.debug("Rejecting '{}' on a connection that is in subscriber mode", name);
+			context.writer().writeError("ERR Can't execute '" + name.toLowerCase(Locale.ROOT) + "': " + ONLY_PUB_SUB);
+			return;
+		}
 		try {
 			command.handler().handle(context, argv);
 		}
@@ -109,10 +120,9 @@ public final class CommandDispatcher {
 	}
 
 	/**
-	 * A registered command: what runs it, and whether the connection must have
-	 * authenticated first.
+	 * A registered command: what runs it, and what state the connection has to be in.
 	 */
-	private record Command(CommandHandler handler, boolean requiresAuthentication) {
+	private record Command(CommandHandler handler, boolean requiresAuthentication, boolean availableWhileSubscribed) {
 	}
 
 	/**
@@ -126,30 +136,19 @@ public final class CommandDispatcher {
 		}
 
 		/**
-		 * Registers a command that a connection may only run once it has authenticated.
+		 * Registers a command. By default a connection may only run it once it has
+		 * authenticated and while it is not in subscriber mode; each
+		 * {@link CommandAvailability} passed lifts one of those two restrictions.
 		 * @param name the command name; it is matched case-insensitively at dispatch time
 		 * @param handler the handler to run
+		 * @param availability when the command may run beyond the default
 		 * @return this builder
 		 * @throws IllegalArgumentException if the command is already registered
 		 */
-		public Builder register(String name, CommandHandler handler) {
-			return register(name, new Command(handler, true));
-		}
-
-		/**
-		 * Registers a command that a connection may run before it has authenticated.
-		 * Reserve this for the handshake itself: a client cannot authenticate without
-		 * being allowed to send {@code AUTH} or {@code HELLO} first.
-		 * @param name the command name; it is matched case-insensitively at dispatch time
-		 * @param handler the handler to run
-		 * @return this builder
-		 * @throws IllegalArgumentException if the command is already registered
-		 */
-		public Builder registerUnauthenticated(String name, CommandHandler handler) {
-			return register(name, new Command(handler, false));
-		}
-
-		private Builder register(String name, Command command) {
+		public Builder register(String name, CommandHandler handler, CommandAvailability... availability) {
+			Set<CommandAvailability> lifted = (availability.length == 0) ? Set.of() : Set.of(availability);
+			Command command = new Command(handler, !lifted.contains(CommandAvailability.UNAUTHENTICATED),
+					lifted.contains(CommandAvailability.WHILE_SUBSCRIBED));
 			String key = name.toUpperCase(Locale.ROOT);
 			if (this.commands.putIfAbsent(key, command) != null) {
 				throw new IllegalArgumentException("command is already registered: " + key);

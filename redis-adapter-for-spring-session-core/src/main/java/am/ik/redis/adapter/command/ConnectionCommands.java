@@ -53,16 +53,18 @@ public final class ConnectionCommands {
 	 * Registers every connection command on a dispatcher. {@code AUTH}, {@code HELLO} and
 	 * {@code QUIT} are the commands a connection may send before it has authenticated:
 	 * the first two are how it authenticates, and refusing to let a client hang up would
-	 * help nobody.
+	 * help nobody. {@code PING} and {@code QUIT} also survive subscriber mode, because a
+	 * subscribed connection still has to be able to prove it is alive and to leave.
 	 * @param builder the dispatcher builder to register on
 	 */
 	public static void registerTo(CommandDispatcher.Builder builder) {
-		builder.register("PING", ConnectionCommands::ping)
-			.registerUnauthenticated("HELLO", ConnectionCommands::hello)
-			.registerUnauthenticated("AUTH", ConnectionCommands::auth)
+		builder.register("PING", ConnectionCommands::ping, CommandAvailability.WHILE_SUBSCRIBED)
+			.register("HELLO", ConnectionCommands::hello, CommandAvailability.UNAUTHENTICATED)
+			.register("AUTH", ConnectionCommands::auth, CommandAvailability.UNAUTHENTICATED)
 			.register("CLIENT", ConnectionCommands::client)
 			.register("SELECT", ConnectionCommands::select)
-			.registerUnauthenticated("QUIT", ConnectionCommands::quit);
+			.register("QUIT", ConnectionCommands::quit, CommandAvailability.UNAUTHENTICATED,
+					CommandAvailability.WHILE_SUBSCRIBED);
 	}
 
 	/**

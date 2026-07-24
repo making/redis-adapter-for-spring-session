@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.net.Socket;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.locks.ReentrantLock;
 
 import am.ik.redis.adapter.command.Authenticator;
 import am.ik.redis.adapter.command.CommandContext;
@@ -13,6 +14,9 @@ import am.ik.redis.adapter.protocol.RespProtocolException;
 import am.ik.redis.adapter.protocol.RespReader;
 import am.ik.redis.adapter.protocol.RespVersion;
 import am.ik.redis.adapter.protocol.RespWriter;
+import am.ik.redis.adapter.pubsub.PubSubRegistry;
+import am.ik.redis.adapter.pubsub.RespSubscriber;
+import am.ik.redis.adapter.pubsub.Subscriber;
 import am.ik.redis.adapter.store.KeyValueStore;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
@@ -33,6 +37,13 @@ import org.slf4j.LoggerFactory;
  * thread; only {@link #close()} may be called from elsewhere, which is how the server
  * tears connections down.
  *
+ * <p>
+ * Once the client subscribes, the connection is no longer the only writer of its socket:
+ * any thread that publishes a message delivers it here. The request/reply cycle therefore
+ * runs under a write lock that the connection's {@link RespSubscriber} takes as well, so
+ * a push can never land in the middle of a reply. A subscription outlives no connection:
+ * the serving thread drops every one of them on its way out.
+ *
  * <h2>Error handling</h2> A malformed frame is answered with an {@code ERR Protocol
  * error} reply and then closed, because the byte stream can no longer be resynchronized —
  * the same thing Redis does. Every other command failure is turned into an error reply by
@@ -50,11 +61,17 @@ final class ClientConnection implements CommandContext, Runnable {
 
 	private final Authenticator authenticator;
 
+	private final PubSubRegistry pubSubRegistry;
+
 	private final long id;
 
 	private final RespReader reader;
 
 	private final RespWriter writer;
+
+	private final ReentrantLock writeLock = new ReentrantLock();
+
+	private final RespSubscriber subscriber;
 
 	private int databaseIndex;
 
@@ -69,11 +86,13 @@ final class ClientConnection implements CommandContext, Runnable {
 		this.dispatcher = Objects.requireNonNull(builder.dispatcher, "dispatcher must not be null");
 		this.databases = List.copyOf(Objects.requireNonNull(builder.databases, "databases must not be null"));
 		this.authenticator = Objects.requireNonNull(builder.authenticator, "authenticator must not be null");
+		this.pubSubRegistry = Objects.requireNonNull(builder.pubSubRegistry, "pubSubRegistry must not be null");
 		this.authenticated = !this.authenticator.isRequired();
 		this.id = builder.id;
 		this.socket.setTcpNoDelay(true);
 		this.reader = new RespReader(this.socket.getInputStream());
 		this.writer = new RespWriter(new BufferedOutputStream(this.socket.getOutputStream()));
+		this.subscriber = new RespSubscriber(this.writer, this.writeLock);
 	}
 
 	/**
@@ -86,7 +105,9 @@ final class ClientConnection implements CommandContext, Runnable {
 
 	/**
 	 * Serves the connection until the client disconnects, sends {@code QUIT}, breaks the
-	 * protocol, or the server closes the socket. Always closes the socket on the way out.
+	 * protocol, or the server closes the socket. Always gives up the connection's
+	 * subscriptions and closes the socket on the way out, so that nothing keeps
+	 * publishing to a socket nobody is reading.
 	 */
 	@Override
 	public void run() {
@@ -101,6 +122,7 @@ final class ClientConnection implements CommandContext, Runnable {
 			logger.warn("Connection {} failed unexpectedly", this.id, e);
 		}
 		finally {
+			this.pubSubRegistry.unsubscribeAll(this.subscriber);
 			close();
 		}
 	}
@@ -114,16 +136,42 @@ final class ClientConnection implements CommandContext, Runnable {
 			}
 			catch (RespProtocolException e) {
 				logger.debug("Connection {} sent a malformed request: {}", this.id, e.toString());
-				this.writer.writeError("ERR Protocol error: " + singleLine(e));
-				this.writer.flush();
+				reply(() -> this.writer.writeError("ERR Protocol error: " + singleLine(e)));
 				return;
 			}
 			if (argv == null) {
 				return;
 			}
-			this.dispatcher.dispatch(this, argv);
+			List<byte[]> request = argv;
+			reply(() -> this.dispatcher.dispatch(this, request));
+		}
+	}
+
+	/**
+	 * Writes one complete reply and flushes it, holding the write lock throughout so that
+	 * a message published from another thread waits rather than interleaving its push
+	 * frame with these bytes.
+	 */
+	private void reply(Reply reply) throws IOException {
+		this.writeLock.lock();
+		try {
+			reply.write();
 			this.writer.flush();
 		}
+		finally {
+			this.writeLock.unlock();
+		}
+	}
+
+	/**
+	 * The writing half of one request, run while the connection's output is held
+	 * exclusively.
+	 */
+	@FunctionalInterface
+	private interface Reply {
+
+		void write() throws IOException;
+
 	}
 
 	/**
@@ -147,6 +195,16 @@ final class ClientConnection implements CommandContext, Runnable {
 	@Override
 	public KeyValueStore store() {
 		return this.databases.get(this.databaseIndex);
+	}
+
+	@Override
+	public PubSubRegistry pubSub() {
+		return this.pubSubRegistry;
+	}
+
+	@Override
+	public Subscriber subscriber() {
+		return this.subscriber;
 	}
 
 	@Override
@@ -236,6 +294,8 @@ final class ClientConnection implements CommandContext, Runnable {
 
 		private @Nullable Authenticator authenticator;
 
+		private @Nullable PubSubRegistry pubSubRegistry;
+
 		private long id;
 
 		private Builder() {
@@ -278,6 +338,17 @@ final class ClientConnection implements CommandContext, Runnable {
 		 */
 		Builder authenticator(Authenticator authenticator) {
 			this.authenticator = authenticator;
+			return this;
+		}
+
+		/**
+		 * Sets the server-wide subscription registry the connection publishes into and
+		 * subscribes on.
+		 * @param pubSubRegistry the shared registry
+		 * @return this builder
+		 */
+		Builder pubSubRegistry(PubSubRegistry pubSubRegistry) {
+			this.pubSubRegistry = pubSubRegistry;
 			return this;
 		}
 

@@ -34,6 +34,8 @@ public final class StandardCommands {
 		KeyCommands.registerTo(builder);
 		StringCommands.registerTo(builder);
 		HashCommands.registerTo(builder);
+		SetCommands.registerTo(builder);
+		PubSubCommands.registerTo(builder);
 	}
 
 }

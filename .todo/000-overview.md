@@ -57,7 +57,7 @@ research; if you need them again, unzip
 | 012 | Split the in-memory backend into its own module | done |
 | 004 | Virtual-thread TCP server + handshake commands | done |
 | 005 | Data commands + simple-mode end-to-end | done |
-| 006 | Pub/Sub + Set commands + keyspace notifications | not started |
+| 006 | Pub/Sub + Set commands + keyspace notifications | done |
 | 007 | Indexed-mode end-to-end (events + index + cleanup) | not started |
 | 008 | Spring Boot server module (config, lifecycle, actuator) | not started |
 | 009 | ZSet commands for SortedSetRedisSessionExpirationStore (optional) | not started |

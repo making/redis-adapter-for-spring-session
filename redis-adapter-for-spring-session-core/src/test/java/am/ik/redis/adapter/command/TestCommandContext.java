@@ -4,21 +4,35 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 
 import am.ik.redis.adapter.protocol.RespVersion;
 import am.ik.redis.adapter.protocol.RespWriter;
+import am.ik.redis.adapter.pubsub.PubSubRegistry;
+import am.ik.redis.adapter.pubsub.RespSubscriber;
+import am.ik.redis.adapter.pubsub.Subscriber;
 import am.ik.redis.adapter.store.KeyValueStore;
 import org.jspecify.annotations.Nullable;
 
 /**
  * A {@link CommandContext} that collects replies in memory, so command handlers can be
  * tested down to the exact bytes they put on the wire without a socket.
+ *
+ * <p>
+ * Messages published to this context land in the same buffer as its replies, exactly as a
+ * real connection writes both to one socket, so a test can assert on the push frames a
+ * subscriber was sent. Two contexts sharing one {@link #pubSub(PubSubRegistry) registry}
+ * stand in for the two connections a publication always crosses.
  */
 final class TestCommandContext implements CommandContext {
 
 	private final ByteArrayOutputStream replies = new ByteArrayOutputStream();
 
 	private final RespWriter writer = new RespWriter(this.replies);
+
+	private final Subscriber subscriber = new RespSubscriber(this.writer, new ReentrantLock());
+
+	private PubSubRegistry pubSubRegistry = new PubSubRegistry();
 
 	private @Nullable KeyValueStore store;
 
@@ -70,6 +84,17 @@ final class TestCommandContext implements CommandContext {
 	 */
 	TestCommandContext store(KeyValueStore store) {
 		this.store = store;
+		return this;
+	}
+
+	/**
+	 * Shares a subscription registry with another context, so the two behave like two
+	 * connections of one server.
+	 * @param pubSubRegistry the registry to use
+	 * @return this context
+	 */
+	TestCommandContext pubSub(PubSubRegistry pubSubRegistry) {
+		this.pubSubRegistry = pubSubRegistry;
 		return this;
 	}
 
@@ -130,6 +155,16 @@ final class TestCommandContext implements CommandContext {
 			throw new UnsupportedOperationException("this context has no backend");
 		}
 		return store;
+	}
+
+	@Override
+	public PubSubRegistry pubSub() {
+		return this.pubSubRegistry;
+	}
+
+	@Override
+	public Subscriber subscriber() {
+		return this.subscriber;
 	}
 
 	@Override

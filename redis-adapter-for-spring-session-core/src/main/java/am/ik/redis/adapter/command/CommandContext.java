@@ -2,6 +2,8 @@ package am.ik.redis.adapter.command;
 
 import am.ik.redis.adapter.protocol.RespVersion;
 import am.ik.redis.adapter.protocol.RespWriter;
+import am.ik.redis.adapter.pubsub.PubSubRegistry;
+import am.ik.redis.adapter.pubsub.Subscriber;
 import am.ik.redis.adapter.store.KeyValueStore;
 import org.jspecify.annotations.Nullable;
 
@@ -33,6 +35,20 @@ public interface CommandContext {
 	 * @return the key-value store to read and write
 	 */
 	KeyValueStore store();
+
+	/**
+	 * Returns the server-wide subscription registry. It is shared by every connection
+	 * because a publisher and a subscriber are never the same one.
+	 * @return the pub/sub registry
+	 */
+	PubSubRegistry pubSub();
+
+	/**
+	 * Returns this connection seen as a receiver of published messages, which is the key
+	 * the {@link #pubSub() registry} tracks its subscriptions under.
+	 * @return this connection as a subscriber
+	 */
+	Subscriber subscriber();
 
 	/**
 	 * Returns the index of the currently selected database.
