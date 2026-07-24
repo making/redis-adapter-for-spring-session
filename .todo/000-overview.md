@@ -28,6 +28,8 @@ research; if you need them again, unzip
 
 - **001** must land first (build structure).
 - **002** and **003** are independent and can be done in parallel after 001.
+- **012** (split the in-memory backend into its own module) needs 002; do it before 004/005
+  so the end-to-end tests are written in the `-inmemory` module from the start.
 - **004** needs 003. **005** needs 002 + 003 + 004. **006** needs 005. **007** needs 006.
 - **008** needs a working core (after 005; richer after 007). **009** (ZSet) after 007.
 - **010** (TLS) needs 004's `ServerSocketFactory` seam + 008's Spring Boot module.
@@ -50,8 +52,9 @@ research; if you need them again, unzip
 | # | Title | State |
 |---|---|---|
 | 001 | Multi-module restructure & build setup | done |
-| 002 | KeyValueStore SPI + in-memory backend | not started |
-| 003 | RESP protocol codec | not started |
+| 002 | KeyValueStore SPI + in-memory backend | done |
+| 003 | RESP protocol codec | done |
+| 012 | Split the in-memory backend into its own module | not started (do before 004/005) |
 | 004 | Virtual-thread TCP server + handshake commands | not started |
 | 005 | Data commands + simple-mode end-to-end | not started |
 | 006 | Pub/Sub + Set commands + keyspace notifications | not started |

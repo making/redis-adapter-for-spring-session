@@ -93,8 +93,10 @@ facade) and `jspecify` (nullness annotations) — the two already on the current
 
 Suggested packages (base `am.ik.redis.adapter`):
 
-- `am.ik.redis.adapter.store` — `KeyValueStore`, `RedisValue` (sealed: string/hash/set,
-  zset later), `KeyEventListener`, `InMemoryKeyValueStore`.
+- `am.ik.redis.adapter.store` — the **SPI only**: `KeyValueStore`, `RedisValue` (sealed:
+  string/hash/set, zset later) with `ByteArrayKey`, `KeyEventListener`,
+  `TypeMismatchException`. The in-memory reference implementation does **not** live here; it
+  is a separate module (`am.ik.redis.adapter.inmemory`, see §6).
 - `am.ik.redis.adapter.protocol` — `RespReader`, `RespWriter`, RESP element model.
 - `am.ik.redis.adapter.command` — `CommandDispatcher`, `CommandContext`, per-command
   handlers, error formatting (`ERR no such key`, `WRONGTYPE`, …).
@@ -154,21 +156,42 @@ Full detail with exact semantics, key formats, and edge cases:
 
 Multi-module Maven (parent = current artifact, packaging `pom`):
 
-- **`redis-adapter-for-spring-session-core`** — layers in §3. **Runtime deps: only
-  `slf4j-api` + `jspecify`.** Test deps: JUnit 5, AssertJ, and for the end-to-end
-  compatibility tests, test-scoped Lettuce + Spring Session + Spring Boot Test (these boot
-  the core server programmatically and drive it through a real client). No Netty, no Spring
-  on the main classpath.
-- **`redis-adapter-for-spring-session-server`** — Spring Boot application that wraps the
-  core: `@ConfigurationProperties` (bind address, port, backend selection, default TTL,
-  optional auth, DB count), a `SmartLifecycle` bean that starts/stops
-  `RedisAdapterServer`, actuator health/metrics, runnable jar. **This module intentionally
-  depends on Spring Boot** — the "no external dependencies" rule applies to the reusable
-  core, not to the runnable server (this is the deliberate trade-off chosen for the
-  server).
+- **`redis-adapter-for-spring-session-core`** — the SPI plus the protocol / command /
+  pubsub / server layers in §3, but **not** a concrete backend. **Runtime deps: only
+  `slf4j-api` + `jspecify`.** Test deps: JUnit 5, AssertJ, ArchUnit. No Netty, no Spring on
+  the main classpath.
+- **`redis-adapter-for-spring-session-inmemory`** — the bundled in-memory reference backend
+  (`am.ik.redis.adapter.inmemory.InMemoryKeyValueStore`: `ConcurrentHashMap` + TTL +
+  passive/active expiry). **Depends only on `core`; runtime deps only `slf4j-api` +
+  `jspecify`.** It implements the `KeyValueStore` SPI from outside `core`, exactly like a
+  future external backend, so the seam is exercised for real rather than trusted. Test deps
+  are only JUnit 5 + AssertJ (backend unit tests); the full-stack end-to-end tests live in
+  the `server` module (below), keeping this module a light, dependency-minimal backend.
+- **`redis-adapter-for-spring-session-server`** — Spring Boot application that depends on
+  `core` + `inmemory` and wires the in-memory backend as the default:
+  `@ConfigurationProperties` (bind address, port, backend selection, default TTL, optional
+  auth, DB count), a `SmartLifecycle` bean that starts/stops `RedisAdapterServer`, actuator
+  health/metrics, runnable jar. **This module intentionally depends on Spring Boot** — the
+  "no external dependencies" rule applies to the reusable core, not to the runnable server
+  (the deliberate trade-off chosen for the server). It also **hosts the end-to-end
+  compatibility tests** (test-scoped Lettuce + Spring Session + Spring Boot Test): they boot
+  the server backed by the in-memory store and drive it through a real Lettuce client
+  running stock Spring Session. E2E belongs here because this module already has every
+  dependency (core, the backend, Spring Boot) and is the runnable application; `core` cannot
+  host them — it has no concrete backend, and a test dependency from `core` onto a backend
+  module would create a Maven reactor cycle.
 
-Dependency direction is strictly `server → core`. Future KVS backends depend on `core`
-only (they implement `KeyValueStore`).
+Dependency direction is strictly acyclic: `inmemory → core`, and `server → core` +
+`server → inmemory`. Every KVS backend — the bundled in-memory one and any future external
+one — depends on `core` only and implements `KeyValueStore`; the in-memory backend is
+deliberately a peer of those future backends rather than a privileged part of `core`.
+
+> Decision (2026-07-24): the in-memory backend was moved out of `core` into its own
+> `-inmemory` module for the reasons above. Naming: module
+> `redis-adapter-for-spring-session-inmemory`, package `am.ik.redis.adapter.inmemory`. The
+> SPI types (`KeyValueStore`, `RedisValue` + records, `ByteArrayKey`, `KeyEventListener`,
+> `TypeMismatchException`) stay in `core` under `am.ik.redis.adapter.store`. This is a
+> recorded policy; the code move itself is a later task.
 
 ## 7. Statelessness & horizontal scaling (design note, not a task by itself)
 
