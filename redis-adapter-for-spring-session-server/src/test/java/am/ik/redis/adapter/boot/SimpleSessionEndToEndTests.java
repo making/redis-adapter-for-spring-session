@@ -15,7 +15,6 @@ import org.springframework.session.Session;
 import org.springframework.session.SessionRepository;
 import org.springframework.session.data.redis.config.annotation.web.http.EnableRedisHttpSession;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -169,7 +168,7 @@ class SimpleSessionEndToEndTests {
 	}
 
 	private static byte[] sessionKey(String sessionId) {
-		return (AdapterServerTestConfiguration.SESSION_KEY_PREFIX + sessionId).getBytes(UTF_8);
+		return SessionKeys.DEFAULT.session(sessionId);
 	}
 
 	@EnableAutoConfiguration

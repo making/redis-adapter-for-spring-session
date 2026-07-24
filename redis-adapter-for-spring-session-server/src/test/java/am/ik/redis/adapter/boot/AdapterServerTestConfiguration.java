@@ -5,7 +5,6 @@ import am.ik.redis.adapter.server.RedisAdapterServer;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 
 /**
@@ -22,27 +21,11 @@ import org.springframework.test.context.DynamicPropertyRegistrar;
  * <p>
  * The {@link KeyValueStores} bean is exposed by that configuration, so a test can assert
  * on what actually reached the backend, which is how the key format itself is verified
- * rather than assumed.
+ * rather than assumed. The names to assert on come from {@link SessionKeys}.
  */
 @TestConfiguration(proxyBeanMethods = false)
 @Import({ KeyValueStoreConfiguration.class, RedisAdapterServerConfiguration.class })
 public class AdapterServerTestConfiguration {
-
-	/** Sessions are stored under this prefix by Spring Session's defaults. */
-	public static final String SESSION_KEY_PREFIX = "spring:session:sessions:";
-
-	/**
-	 * Prefix of the shadow key whose death is what Spring Session's indexed mode turns
-	 * into a session-deleted or session-expired event.
-	 */
-	public static final String SHADOW_KEY_PREFIX = SESSION_KEY_PREFIX + "expires:";
-
-	/** Prefix of the per-minute set of sessions due to expire, keyed by epoch millis. */
-	public static final String EXPIRATIONS_KEY_PREFIX = "spring:session:expirations:";
-
-	/** Prefix of the set of session ids belonging to one principal. */
-	public static final String PRINCIPAL_INDEX_KEY_PREFIX = "spring:session:index:"
-			+ FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME + ":";
 
 	/**
 	 * Property turning the in-memory backend's active-expiry sweeper off, so that a test

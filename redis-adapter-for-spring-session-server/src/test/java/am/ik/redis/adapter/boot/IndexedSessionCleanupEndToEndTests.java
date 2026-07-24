@@ -20,7 +20,6 @@ import org.springframework.session.data.redis.RedisIndexedSessionRepository.Redi
 import org.springframework.session.data.redis.config.annotation.web.http.EnableRedisIndexedHttpSession;
 import org.springframework.session.events.SessionExpiredEvent;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -95,8 +94,7 @@ class IndexedSessionCleanupEndToEndTests {
 		RedisOperations<String, Object> redis = this.sessions.getSessionRedisOperations();
 		long minute = truncateToMinute(store().currentTimeMillis());
 		for (long bucket : new long[] { minute, minute + MILLIS_PER_MINUTE }) {
-			redis.boundSetOps(AdapterServerTestConfiguration.EXPIRATIONS_KEY_PREFIX + bucket)
-				.add("expires:" + sessionId);
+			redis.boundSetOps(SessionKeys.DEFAULT.expirations(bucket)).add("expires:" + sessionId);
 		}
 	}
 
@@ -114,7 +112,7 @@ class IndexedSessionCleanupEndToEndTests {
 	}
 
 	private static byte[] shadowKey(String sessionId) {
-		return (AdapterServerTestConfiguration.SHADOW_KEY_PREFIX + sessionId).getBytes(UTF_8);
+		return SessionKeys.DEFAULT.shadow(sessionId);
 	}
 
 	@EnableAutoConfiguration

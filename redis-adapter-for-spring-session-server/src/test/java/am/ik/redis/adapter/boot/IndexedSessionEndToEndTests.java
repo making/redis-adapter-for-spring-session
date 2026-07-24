@@ -22,7 +22,6 @@ import org.springframework.session.events.SessionCreatedEvent;
 import org.springframework.session.events.SessionDeletedEvent;
 import org.springframework.session.events.SessionExpiredEvent;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 
@@ -235,15 +234,15 @@ class IndexedSessionEndToEndTests {
 	}
 
 	private static byte[] sessionKey(String sessionId) {
-		return (AdapterServerTestConfiguration.SESSION_KEY_PREFIX + sessionId).getBytes(UTF_8);
+		return SessionKeys.DEFAULT.session(sessionId);
 	}
 
 	private static byte[] shadowKey(String sessionId) {
-		return (AdapterServerTestConfiguration.SHADOW_KEY_PREFIX + sessionId).getBytes(UTF_8);
+		return SessionKeys.DEFAULT.shadow(sessionId);
 	}
 
 	private static byte[] principalKey(String principal) {
-		return (AdapterServerTestConfiguration.PRINCIPAL_INDEX_KEY_PREFIX + principal).getBytes(UTF_8);
+		return SessionKeys.DEFAULT.principalIndex(principal);
 	}
 
 	@EnableAutoConfiguration
