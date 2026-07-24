@@ -24,8 +24,8 @@ research; if you need them again, unzip
                                                    └───────────── 008 Spring Boot server module ──┤
                                                                                                   ├─ 013 part 2 (E2E)
                                                                                                   ├─ 009 ZSet (optional)
-                                                                                                  ├─ 010 TLS (SslBundle)
-                                                                                                  └─ 011 docs / README
+                                                                                                  ├─ 010 TLS (SslBundle) ─ 014 native image / container
+                                                                                                  └─ 011 docs / README (last, after 009–014)
 ```
 
 - **001** must land first (build structure).
@@ -40,8 +40,13 @@ research; if you need them again, unzip
   and lands before 008, while its part 2 (the Spring Session E2E) is built on the
   `databases` property 008 introduces rather than on a throwaway test configuration.
 - **010** (TLS) needs 004's `ServerSocketFactory` seam + 008's Spring Boot module.
-- **011** (docs/README) comes last, after 007–010, so documented behaviour (incl. TLS) is
-  proven.
+- **014** (native image / container) is best done after 010, since certificate material
+  needs resource hints in a native binary. It also carries a rule that applies to every
+  task after it: Spring evaluates `@Conditional` while the image is built, so a property an
+  operator sets at deploy time must never decide which beans exist. 008 already had to
+  design for this.
+- **011** (docs/README) comes last, after 007–010 and 014, so documented behaviour (incl.
+  TLS and however the server is shipped) is proven.
 
 ## Definition of done (every task)
 
@@ -70,4 +75,5 @@ research; if you need them again, unzip
 | 013 | Non-default namespace and database end-to-end (part 1 before 008, part 2 after) | part 1 done |
 | 009 | ZSet commands for SortedSetRedisSessionExpirationStore (optional) | not started |
 | 010 | TLS via Spring Boot SslBundle | not started |
+| 014 | GraalVM native image and container image | not started |
 | 011 | README, docs & tested examples | not started |

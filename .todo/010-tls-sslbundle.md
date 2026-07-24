@@ -51,6 +51,14 @@ enabled completes the handshake and runs session commands. Plain TCP remains the
 ## Notes / gotchas
 - `SslBundle.createSslContext()` gives an `SSLContext`; its `getServerSocketFactory()` is
   the injection point — no manual `KeyManagerFactory`/`TrustManagerFactory` code.
+- **Decide TLS inside the bean, not with `@ConditionalOnProperty`.** A native image is
+  planned (task 014) and Spring evaluates conditions once, while the image is built, so a
+  condition would make `redis-adapter.ssl.enabled` unchangeable in a deployed image. Task
+  008 moved backend selection off conditions for the same reason. Certificate material also
+  needs resource hints to be readable from a native binary.
+- The server currently refuses to start when `redis-adapter.ssl` is set at all, so that
+  nobody is served plain TCP while believing otherwise. That check
+  (`RedisAdapterServerConfiguration`) is what this task replaces.
 - Keep certificate material out of the repo except a clearly-labelled self-signed **test**
   cert. Never commit real keys.
 - Bundle hot-reload (`SslBundles.addBundleUpdateHandler`) is a nice-to-have; note it as a
