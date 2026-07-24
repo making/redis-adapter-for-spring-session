@@ -6,16 +6,19 @@ on:
     - develop
     - main
     paths:
-    - src/**
+    - '**/src/**'
     - pom.xml
+    - '**/pom.xml'
     - .github/workflows/ci.yaml
   pull_request:
     branches:
     - develop
     - main
     paths:
-    - src/**
+    - '**/src/**'
     - pom.xml
+    - '**/pom.xml'
+    - .github/workflows/ci.yaml
 jobs:
   test:
     runs-on: ubuntu-latest

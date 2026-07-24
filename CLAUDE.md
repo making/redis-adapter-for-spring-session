@@ -11,7 +11,8 @@ repository.
 ```
 
 ## Design Requirements
-- **Package**: `TBD` - Main package
+- **Package**: `am.ik.redis.adapter` - Main package (core module); the Spring Boot server module uses `am.ik.redis.adapter.boot`.
+- **Modules**: `redis-adapter-for-spring-session-core` (dependency-free core) and `redis-adapter-for-spring-session-server` (Spring Boot server).
 
 ## Implemented Features
 
