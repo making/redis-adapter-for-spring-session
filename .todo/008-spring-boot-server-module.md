@@ -25,7 +25,11 @@ health/metrics, and selects the backend (in-memory now; SPI-ready for future bac
    - `backend` selector (default `in-memory`; enum/string so future backends slot in).
    - `defaultTtl` / session-related knobs only if needed (Spring Session sets TTLs itself,
      so this may be unnecessary — keep minimal).
-   - optional `password` (enables `AUTH`), `databases` count (default 1/16).
+   - optional `password` (enables `AUTH`), `databases` count (default 1/16). The core side
+     already exists: `RedisAdapterServer.Builder.password(...)` /
+     `.authenticator(Authenticator)` and `.databases(List<KeyValueStore>)` (one store per
+     database index) — so this is property binding, not new behaviour. See
+     architecture.md §8.1.
    - active-expiry sweep interval.
    - `ssl` group (enabled/bundle) — **wired in task 010** via Spring Boot `SslBundle`; here
      just leave the property placeholder and keep the default `ServerSocketFactory`.

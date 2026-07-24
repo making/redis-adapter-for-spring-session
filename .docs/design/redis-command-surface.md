@@ -114,6 +114,25 @@ RESP2/RESP3), `AUTH` (accept when no password configured, or validate when confi
 booting the server and connecting a real Lettuce client (task 004): log any unrecognized
 command and implement until the handshake and session flows pass.
 
+Empirically (Lettuce 7.5.2, task 004): a default client sends `HELLO 3`, then `SELECT` if
+the URI names a database, `CLIENT SETNAME` if it names a client name, `CLIENT SETINFO
+lib-name` and `CLIENT SETINFO lib-ver`, and `CLIENT ID` / `PING` on demand. A client pinned
+to RESP2 sends **no** `HELLO` at all, so a connection must default to RESP2 rather than
+wait to be told.
+
+**Authentication.** With a password configured, every command except `AUTH`, `HELLO` and
+`QUIT` is answered `NOAUTH Authentication required.` until that connection authenticates.
+Credentials arrive as `AUTH [username] password` or as
+`HELLO <protover> AUTH <username> <password>` — a client configured with credentials uses
+the latter — and a password sent on its own authenticates the user `default`. Wrong
+credentials get `WRONGPASS invalid username-password pair or user is disabled.`; a `HELLO`
+with no credentials on a protected server gets `NOAUTH HELLO must be called with the client
+already authenticated, otherwise the HELLO <proto> AUTH <user> <pass> option can be used to
+authenticate the client and select the RESP protocol version.` A rejected `HELLO` changes
+nothing about the connection, including its protocol version. With no password configured
+the server is open and `AUTH` replies `+OK` to anything, so a client that carries a
+password still connects.
+
 `CONFIG GET notify-keyspace-events` must return a non-null reply (e.g. the pair
 `notify-keyspace-events` → `Egx`, or an empty reply) and **must not error**; `CONFIG SET
 notify-keyspace-events <flags>` must reply `+OK`. Our store always emits keyevents, so the

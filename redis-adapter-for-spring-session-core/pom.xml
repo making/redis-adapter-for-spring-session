@@ -43,6 +43,13 @@
 			<artifactId>archunit-junit5</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- The server is verified against a real Redis client, which is a testing library
+		     here: the main classpath stays free of it. -->
+		<dependency>
+			<groupId>io.lettuce</groupId>
+			<artifactId>lettuce-core</artifactId>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>

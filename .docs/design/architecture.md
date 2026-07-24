@@ -145,10 +145,10 @@ Full detail with exact semantics, key formats, and edge cases:
 - Indexed mode adds: `SADD`, `SREM`, `SMEMBERS`; pub/sub `PUBLISH`, `SUBSCRIBE`,
   `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE`; keyspace-notification emission on `DEL` and
   TTL expiry; `CONFIG GET`/`CONFIG SET notify-keyspace-events` (tolerant).
-- Handshake/session: `PING`, `HELLO` (RESP2/3 negotiation), `AUTH` (accept/no-op unless a
-  password is configured), `CLIENT` (`SETINFO`/`SETNAME` → OK), `SELECT`, `QUIT`,
-  `COMMAND` (minimal). The exact handshake set is pinned empirically against a real
-  Lettuce client (task 004).
+- Handshake/session: `PING`, `HELLO` (RESP2/3 negotiation), `AUTH` (validated when a
+  password is configured, accepted otherwise — see §8.1), `CLIENT`
+  (`SETINFO`/`SETNAME` → OK), `SELECT`, `QUIT`, `COMMAND` (minimal). The exact handshake
+  set is pinned empirically against a real Lettuce client (task 004).
 - Optional (`SortedSetRedisSessionExpirationStore`): `ZADD`, `ZREM`, `ZREVRANGEBYSCORE`
   (task 009).
 
@@ -207,7 +207,41 @@ deliberately a peer of those future backends rather than a privileged part of `c
   and trivial. This is documented for backend authors (task 011) and is not needed for the
   in-memory deliverable.
 
-## 8. TLS (Spring Boot SslBundle)
+## 8. Authentication and TLS
+
+Two independent protections, meant to be used together on any untrusted network: `AUTH`
+decides *who* may talk to the adapter, TLS decides *who can read* what they say.
+
+### 8.1 Authentication (`AUTH`)
+
+The adapter is open by default — anything that reaches the port can read and write every
+session. Giving the server a password makes clients authenticate exactly as they do
+against Redis. This lives entirely in the core:
+
+- `am.ik.redis.adapter.command.Authenticator` is the seam: `Authenticator.open()` (the
+  default), `Authenticator.password(pw)`, `Authenticator.usernamePassword(user, pw)`, or a
+  custom implementation backed by whatever credential store an operator has.
+  `RedisAdapterServer.Builder` takes `password(...)` or `authenticator(...)`.
+- Credentials are compared in constant time and never logged, not even on failure.
+- Authentication state is **per connection**. Until a connection authenticates, only
+  `AUTH`, `HELLO` and `QUIT` are accepted; everything else is answered
+  `NOAUTH Authentication required.` The check sits in `CommandDispatcher`, so a command is
+  protected by *how it is registered* (`register` vs `registerUnauthenticated`) rather than
+  by each handler remembering to check — a command added later is protected by default.
+- Clients send `AUTH [username] password` or `HELLO <protover> AUTH <username> <password>`;
+  a password on its own authenticates the user `default`. Wrong credentials get
+  `WRONGPASS ...`, and a `HELLO` without credentials on a protected server gets the Redis
+  `NOAUTH HELLO must be called with the client already authenticated ...` reply.
+- A Spring application needs only `spring.data.redis.password`; Lettuce then carries the
+  credentials in its `HELLO`. The matching server-side property (`redis-adapter.password`)
+  is task 008.
+- On an **open** server `AUTH` still replies `+OK` rather than the Redis error, so a client
+  configured with a password can reach an adapter that needs none.
+
+The password itself crosses the network in clear text, exactly as with Redis, which is why
+a protected server outside a trusted network also wants §8.2.
+
+### 8.2 TLS (Spring Boot SslBundle)
 
 TLS is terminated by the adapter server so clients can connect over `rediss://`. The
 integration is split to keep the core dependency-free:
