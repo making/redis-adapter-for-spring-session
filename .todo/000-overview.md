@@ -21,6 +21,7 @@ research; if you need them again, unzip
                  └────────────────── 005 data cmds + simple E2E ┴─ 006 pubsub/set/keyspace ── 007 indexed E2E
                                                    │                                              │
                                                    └───────────── 008 Spring Boot server module ──┤
+                                                                                                  ├─ 013 namespace/db E2E
                                                                                                   ├─ 009 ZSet (optional)
                                                                                                   ├─ 010 TLS (SslBundle)
                                                                                                   └─ 011 docs / README
@@ -32,6 +33,8 @@ research; if you need them again, unzip
   so the end-to-end tests are written in the `-inmemory` module from the start.
 - **004** needs 003. **005** needs 002 + 003 + 004. **006** needs 005. **007** needs 006.
 - **008** needs a working core (after 005; richer after 007). **009** (ZSet) after 007.
+- **013** (non-default namespace / database) needs 007's harness and 004's `SELECT`; it
+  closes the one gap 007 leaves, since every E2E written so far runs on the defaults.
 - **010** (TLS) needs 004's `ServerSocketFactory` seam + 008's Spring Boot module.
 - **011** (docs/README) comes last, after 007–010, so documented behaviour (incl. TLS) is
   proven.
@@ -60,6 +63,7 @@ research; if you need them again, unzip
 | 006 | Pub/Sub + Set commands + keyspace notifications | done |
 | 007 | Indexed-mode end-to-end (events + index + cleanup) | done |
 | 008 | Spring Boot server module (config, lifecycle, actuator) | not started |
+| 013 | Non-default namespace and database end-to-end | not started |
 | 009 | ZSet commands for SortedSetRedisSessionExpirationStore (optional) | not started |
 | 010 | TLS via Spring Boot SslBundle | not started |
 | 011 | README, docs & tested examples | not started |
