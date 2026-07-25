@@ -43,21 +43,45 @@ import org.jspecify.annotations.Nullable;
  * carries a short lease, so one left behind by a process that died mid-rename disappears
  * on its own.
  *
- * <h2>Format</h2> A format byte, a type byte, the deadline, then the value. Lengths are
- * 32-bit, which is the length a Redis string, hash field or set member can have anyway.
- * The format byte is there so a future change can be recognized rather than guessed at;
- * anything else is refused rather than read as something it is not.
+ * <h2>Why the lease's TTL is here too</h2> Pushing the same deadline out again is what
+ * Spring Session does on every single request, and it is the most expensive thing this
+ * backend does: moving the key onto a freshly granted lease and revoking the old one
+ * costs three raft writes, where renewing the lease it is already on costs none. Renewing
+ * is only correct when the lease renews to the TTL the new deadline needs — a lease keeps
+ * the TTL it was <em>granted</em> with — so that TTL has to be known, and the store
+ * asking for it did not necessarily grant the lease: another replica may have. It
+ * therefore travels with the key, beside the deadline it belongs to, which is the only
+ * place every replica can read it from.
+ *
+ * <h2>Format</h2> A format byte, a type byte, the deadline, the lease's TTL, then the
+ * value. Lengths are 32-bit, which is the length a Redis string, hash field or set member
+ * can have anyway. There is one format, and the byte is there so that anything else is
+ * refused rather than read as something it is not: a keyspace written by another version
+ * of this backend says so instead of decoding into nonsense.
  *
  * @param value the typed value, or {@code null} for a tombstone
  * @param expireAtMillis the absolute deadline in epoch milliseconds, or
  * {@link #NO_EXPIRY} for a key that does not expire
+ * @param leaseTtlSeconds the TTL the key's etcd lease was granted with, which is what
+ * renewing that lease resets it to, or {@link #NO_LEASE_TTL} when the key is on no lease
  */
-record Envelope(@Nullable RedisValue value, long expireAtMillis) {
+record Envelope(@Nullable RedisValue value, long expireAtMillis, long leaseTtlSeconds) {
 
 	/** Sentinel deadline meaning "never expires". */
 	static final long NO_EXPIRY = Long.MAX_VALUE;
 
-	private static final byte FORMAT = 1;
+	/**
+	 * Sentinel TTL meaning "there is no lease to renew": the deadline of a key on no
+	 * lease is pushed out by granting one rather than by renewing one.
+	 */
+	static final long NO_LEASE_TTL = 0;
+
+	/**
+	 * 2 rather than 1 because 1 was this layout without the lease's TTL, before anything
+	 * was released. Nothing has to read it, but a keyspace left over from then is refused
+	 * by the check below rather than read as if the TTL were there.
+	 */
+	private static final byte FORMAT = 2;
 
 	private static final byte TOMBSTONE = 0;
 
@@ -70,13 +94,14 @@ record Envelope(@Nullable RedisValue value, long expireAtMillis) {
 	private static final byte ZSET = 4;
 
 	/**
-	 * Returns an envelope holding a value.
+	 * Returns an envelope holding a value under a deadline.
 	 * @param value the typed value
 	 * @param expireAtMillis the absolute deadline, or {@link #NO_EXPIRY}
+	 * @param leaseTtlSeconds the TTL of the lease enforcing it, or {@link #NO_LEASE_TTL}
 	 * @return the envelope
 	 */
-	static Envelope of(RedisValue value, long expireAtMillis) {
-		return new Envelope(value, expireAtMillis);
+	static Envelope of(RedisValue value, long expireAtMillis, long leaseTtlSeconds) {
+		return new Envelope(value, expireAtMillis, leaseTtlSeconds);
 	}
 
 	/**
@@ -85,7 +110,7 @@ record Envelope(@Nullable RedisValue value, long expireAtMillis) {
 	 * @return the tombstone
 	 */
 	static Envelope tombstone() {
-		return new Envelope(null, NO_EXPIRY);
+		return new Envelope(null, NO_EXPIRY, NO_LEASE_TTL);
 	}
 
 	/**
@@ -122,10 +147,24 @@ record Envelope(@Nullable RedisValue value, long expireAtMillis) {
 	/**
 	 * Returns the same value under a new deadline.
 	 * @param expireAtMillis the absolute deadline, or {@link #NO_EXPIRY}
+	 * @param leaseTtlSeconds the TTL of the lease that will enforce it, or
+	 * {@link #NO_LEASE_TTL} when there is none
 	 * @return the new envelope
 	 */
-	Envelope withExpireAt(long expireAtMillis) {
-		return new Envelope(this.value, expireAtMillis);
+	Envelope withDeadline(long expireAtMillis, long leaseTtlSeconds) {
+		return new Envelope(this.value, expireAtMillis, leaseTtlSeconds);
+	}
+
+	/**
+	 * Reports whether the key's lease can be <em>renewed</em> to cover a deadline instead
+	 * of being replaced by a new one. A lease renews to the TTL it was granted with, so
+	 * it covers exactly the deadline that asks for that same TTL; anything else has to be
+	 * granted, and this backend never leaves a key on a lease longer than it is due.
+	 * @param leaseTtlSeconds the TTL the new deadline needs
+	 * @return {@code true} if renewing the lease is enough
+	 */
+	boolean leaseRenewsTo(long leaseTtlSeconds) {
+		return this.leaseTtlSeconds != NO_LEASE_TTL && this.leaseTtlSeconds == leaseTtlSeconds;
 	}
 
 	/**
@@ -138,6 +177,7 @@ record Envelope(@Nullable RedisValue value, long expireAtMillis) {
 			out.writeByte(FORMAT);
 			out.writeByte(type());
 			out.writeLong(this.expireAtMillis);
+			out.writeLong(this.leaseTtlSeconds);
 			switch (this.value) {
 				case null -> {
 				}
@@ -187,6 +227,7 @@ record Envelope(@Nullable RedisValue value, long expireAtMillis) {
 			}
 			byte type = in.readByte();
 			long expireAtMillis = in.readLong();
+			long leaseTtlSeconds = in.readLong();
 			RedisValue value = switch (type) {
 				case TOMBSTONE -> null;
 				case STRING -> new StringValue(in.readAllBytes());
@@ -216,7 +257,7 @@ record Envelope(@Nullable RedisValue value, long expireAtMillis) {
 				}
 				default -> throw new EtcdException("Unknown value type " + type);
 			};
-			return new Envelope(value, expireAtMillis);
+			return new Envelope(value, expireAtMillis, leaseTtlSeconds);
 		}
 		catch (IOException e) {
 			throw new EtcdException("Could not read a stored value", e);

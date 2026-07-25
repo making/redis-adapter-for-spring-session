@@ -420,23 +420,24 @@ before planning around it. Measured against a single-member etcd in a container 
 3 ms; `.docs/design/etcd-performance.md` has the full numbers and the harness that takes them, so
 you can take your own.
 
-- **A session write costs tens of milliseconds and twelve etcd raft writes**, a read about half
+- **A session write costs about ten milliseconds and six etcd raft writes**, a read about half
   a millisecond and one read call. Sessions written per second come out at roughly the cluster's
-  raft write rate divided by twelve; reads barely enter into it.
-- **One client connection carries 20 to 30 session writes per second.** Commands on a connection
+  raft write rate divided by six; reads barely enter into it.
+- **One client connection carries 30 to 50 session writes per second.** Commands on a connection
   are served in order, as Redis serves them, so an application sharing one Lettuce connection
   queues behind itself. More application instances, or more connections, multiply it.
 - **Keep session attributes in the tens of kilobytes.** Below that the raft commit dominates and
-  the bytes are noise — a 100 KB session costs about three times a 1 KB one. Above etcd's
-  `--max-request-bytes` (1.5 MiB by default) the write is refused outright and the client is told
-  `ERR internal error`, with etcd's reason in the adapter's log. A cluster also has a total size
-  limit (`--quota-backend-bytes`, 2 GiB by default).
+  the bytes are noise — a 100 KB session costs a few milliseconds more than a 1 KB one. Above
+  etcd's `--max-request-bytes` (1.5 MiB by default) the write is refused outright and the client
+  is told `ERR internal error`, with etcd's reason in the adapter's log. A cluster also has a
+  total size limit (`--quota-backend-bytes`, 2 GiB by default).
 - **One key is contended by design**, and that is handled: every session expiring in the same
   minute joins that minute's set, so the adapter applies the writes waiting for one key together,
   in a single etcd transaction, instead of letting them compete. Hundreds of writers at once
   therefore cost *less* per write rather than more (0.01 etcd calls per write at 256 writers,
   against 15 without it). What still grows is the bucket itself: adding to a minute that already
-  holds 10,000 sessions costs about 10 ms, however few writers there are.
+  holds 10,000 sessions costs about five times what an empty one does, however few writers there
+  are.
 
 ## What is implemented
 

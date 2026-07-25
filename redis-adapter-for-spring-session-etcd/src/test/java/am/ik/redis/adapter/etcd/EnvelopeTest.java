@@ -26,7 +26,7 @@ class EnvelopeTest {
 
 	@Test
 	void aStringSurvivesTheRoundTrip() {
-		Envelope envelope = Envelope.of(new StringValue(new byte[] { 0, 1, -1, 127, -128 }), 1234L);
+		Envelope envelope = Envelope.of(new StringValue(new byte[] { 0, 1, -1, 127, -128 }), 1234L, 60L);
 
 		Envelope decoded = Envelope.decode(envelope.encode());
 
@@ -36,7 +36,8 @@ class EnvelopeTest {
 
 	@Test
 	void anEmptyStringIsNotAnAbsentOne() {
-		Envelope decoded = Envelope.decode(Envelope.of(new StringValue(new byte[0]), Envelope.NO_EXPIRY).encode());
+		Envelope decoded = Envelope
+			.decode(Envelope.of(new StringValue(new byte[0]), Envelope.NO_EXPIRY, Envelope.NO_LEASE_TTL).encode());
 
 		assertThat(decoded.isTombstone()).isFalse();
 		assertThat(((StringValue) decoded.requiredValue()).value()).isEmpty();
@@ -48,7 +49,8 @@ class EnvelopeTest {
 		fields.put(key("z"), bytes("1"));
 		fields.put(key("a"), bytes("2"));
 
-		Envelope decoded = Envelope.decode(Envelope.of(new HashValue(fields), Envelope.NO_EXPIRY).encode());
+		Envelope decoded = Envelope
+			.decode(Envelope.of(new HashValue(fields), Envelope.NO_EXPIRY, Envelope.NO_LEASE_TTL).encode());
 
 		HashValue hash = (HashValue) decoded.requiredValue();
 		assertThat(hash.fields().keySet()).containsExactly(key("z"), key("a"));
@@ -59,7 +61,7 @@ class EnvelopeTest {
 	void aSetKeepsItsMembers() {
 		Set<ByteArrayKey> members = new LinkedHashSet<>(Set.of(key("a"), key("b")));
 
-		Envelope decoded = Envelope.decode(Envelope.of(new SetValue(members), 7L).encode());
+		Envelope decoded = Envelope.decode(Envelope.of(new SetValue(members), 7L, 1L).encode());
 
 		assertThat(((SetValue) decoded.requiredValue()).members()).containsExactlyInAnyOrder(key("a"), key("b"));
 	}
@@ -70,7 +72,8 @@ class EnvelopeTest {
 		scores.put(key("a"), 1.5);
 		scores.put(key("b"), 1.7976931348623157E308);
 
-		Envelope decoded = Envelope.decode(Envelope.of(new ZSetValue(scores), Envelope.NO_EXPIRY).encode());
+		Envelope decoded = Envelope
+			.decode(Envelope.of(new ZSetValue(scores), Envelope.NO_EXPIRY, Envelope.NO_LEASE_TTL).encode());
 
 		assertThat(((ZSetValue) decoded.requiredValue()).scores()).containsOnly(entry(key("a"), 1.5),
 				entry(key("b"), 1.7976931348623157E308));
@@ -86,12 +89,12 @@ class EnvelopeTest {
 
 	@Test
 	void aDeadlineIsPassedAtTheMillisecondItNames() {
-		Envelope envelope = Envelope.of(new StringValue(new byte[0]), 1000L);
+		Envelope envelope = Envelope.of(new StringValue(new byte[0]), 1000L, Envelope.NO_LEASE_TTL);
 
 		assertThat(envelope.isExpired(999L)).isFalse();
 		assertThat(envelope.isExpired(1000L)).isTrue();
-		assertThat(Envelope.of(new StringValue(new byte[0]), Envelope.NO_EXPIRY).isExpired(Long.MAX_VALUE - 1))
-			.isFalse();
+		assertThat(Envelope.of(new StringValue(new byte[0]), Envelope.NO_EXPIRY, Envelope.NO_LEASE_TTL)
+			.isExpired(Long.MAX_VALUE - 1)).isFalse();
 	}
 
 	/**
@@ -101,18 +104,41 @@ class EnvelopeTest {
 	 */
 	@Test
 	void whatARemovalAnnouncesDependsOnWhatWasRemoved() {
-		assertThat(Envelope.of(new StringValue(new byte[0]), 1000L).removalEvent(1000L))
+		assertThat(Envelope.of(new StringValue(new byte[0]), 1000L, Envelope.NO_LEASE_TTL).removalEvent(1000L))
 			.isEqualTo(Envelope.Removal.EXPIRED);
-		assertThat(Envelope.of(new StringValue(new byte[0]), 1000L).removalEvent(999L))
+		assertThat(Envelope.of(new StringValue(new byte[0]), 1000L, Envelope.NO_LEASE_TTL).removalEvent(999L))
 			.isEqualTo(Envelope.Removal.DELETED);
-		assertThat(Envelope.of(new StringValue(new byte[0]), Envelope.NO_EXPIRY).removalEvent(999L))
+		assertThat(
+				Envelope.of(new StringValue(new byte[0]), Envelope.NO_EXPIRY, Envelope.NO_LEASE_TTL).removalEvent(999L))
 			.isEqualTo(Envelope.Removal.DELETED);
 		assertThat(Envelope.tombstone().removalEvent(999L)).isNull();
 	}
 
+	/**
+	 * The TTL of the key's lease travels with the key because the replica that pushes a
+	 * deadline out is not necessarily the one that granted the lease, and renewing a
+	 * lease rather than replacing it is only correct when that TTL is known.
+	 */
+	@Test
+	void theTtlOfTheKeysLeaseSurvivesTheRoundTrip() {
+		Envelope decoded = Envelope.decode(Envelope.of(new StringValue(bytes("v")), 1234L, 1800L).encode());
+
+		assertThat(decoded.leaseTtlSeconds()).isEqualTo(1800L);
+		assertThat(decoded.leaseRenewsTo(1800L)).isTrue();
+		assertThat(decoded.leaseRenewsTo(1799L)).isFalse();
+	}
+
+	@Test
+	void aKeyOnNoLeaseRenewsNothing() {
+		Envelope onNoLease = Envelope.of(new StringValue(bytes("v")), 1234L, Envelope.NO_LEASE_TTL);
+
+		assertThat(onNoLease.leaseRenewsTo(Envelope.NO_LEASE_TTL)).isFalse();
+		assertThat(onNoLease.leaseRenewsTo(1800L)).isFalse();
+	}
+
 	@Test
 	void aValueWrittenByAnotherFormatIsRefusedRatherThanMisread() {
-		byte[] encoded = Envelope.of(new StringValue(bytes("v")), Envelope.NO_EXPIRY).encode();
+		byte[] encoded = Envelope.of(new StringValue(bytes("v")), Envelope.NO_EXPIRY, Envelope.NO_LEASE_TTL).encode();
 		encoded[0] = 99;
 
 		assertThatThrownBy(() -> Envelope.decode(encoded)).isInstanceOf(EtcdException.class)

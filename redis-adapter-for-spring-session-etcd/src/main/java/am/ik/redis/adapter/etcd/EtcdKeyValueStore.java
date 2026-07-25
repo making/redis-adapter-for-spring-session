@@ -65,6 +65,15 @@ import org.slf4j.LoggerFactory;
  * and the removal is what announces the expiry.</li>
  * </ul>
  *
+ * <p>
+ * Pushing a deadline out <strong>renews</strong> the lease the key is already on whenever
+ * that lease renews to the TTL the new deadline needs, and grants a new one only when it
+ * does not. This is the difference between one raft write and three, on the operation
+ * Spring Session issues three times per session save, so it is the difference the cost of
+ * this backend mostly consists of. The TTL a lease was granted with travels in the key
+ * (see {@link Envelope}) because the replica pushing the deadline out is not necessarily
+ * the one that granted it.
+ *
  * <h2>Key events</h2> Every event comes from a <strong>watch</strong> on the database's
  * prefix, never from the call that caused it, which is what carries an expiry across
  * replicas. etcd does not say why a key was removed, so this backend does: the watch asks
@@ -450,20 +459,54 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 			if (live == null) {
 				return false;
 			}
-			long lease = this.client.grantLease(leaseSeconds(epochMilli));
+			long ttlSeconds = leaseSeconds(epochMilli);
+			long renewed = renewedLease(live, ttlSeconds);
+			long lease = (renewed != EtcdClient.NO_LEASE) ? renewed : this.client.grantLease(ttlSeconds);
 			EtcdClient.Write written = this.client.putIfUnchanged(etcdKey, live.kv().modRevision(),
-					live.envelope().withExpireAt(epochMilli).encode(), lease);
+					live.envelope().withDeadline(epochMilli, ttlSeconds).encode(), lease);
 			if (written.written()) {
-				// The key is on the new lease, so the old one holds nothing. Revoking it
-				// matters: Spring Session sets the expiry again on every request, and a
-				// lease left behind each time would pile up in etcd until it aged out.
-				this.client.revokeLeaseQuietly(live.kv().lease());
+				if (renewed == EtcdClient.NO_LEASE) {
+					// The key is on the new lease, so the old one holds nothing.
+					// Revoking it matters: Spring Session sets the expiry again on
+					// every request, and a lease left behind each time would pile up
+					// in etcd until it aged out.
+					this.client.revokeLeaseQuietly(live.kv().lease());
+				}
 				return true;
 			}
-			this.client.revokeLeaseQuietly(lease);
+			if (renewed == EtcdClient.NO_LEASE) {
+				this.client.revokeLeaseQuietly(lease);
+			}
 			backOff(attempt);
 		}
 		throw contention("PEXPIREAT", key);
+	}
+
+	/**
+	 * Returns the key's own lease when renewing it covers the new deadline, which is what
+	 * makes the ordinary case — the same TTL pushed out again — one raft write instead of
+	 * three.
+	 *
+	 * <p>
+	 * A lease renews to the TTL it was granted with, and the key says what that was
+	 * ({@link Envelope#leaseRenewsTo}), because the replica asking did not necessarily
+	 * grant it. Anything else falls back to granting: a key on no lease at all, a
+	 * deadline needing a different TTL, or a lease etcd has already collected.
+	 * @param live the key as it was read
+	 * @param ttlSeconds the lease TTL the new deadline needs
+	 * @return the lease to write the key back on, or {@link EtcdClient#NO_LEASE} if one
+	 * has to be granted
+	 */
+	private long renewedLease(Live live, long ttlSeconds) {
+		long lease = live.kv().lease();
+		if (lease == EtcdClient.NO_LEASE || !live.envelope().leaseRenewsTo(ttlSeconds)) {
+			return EtcdClient.NO_LEASE;
+		}
+		// Renewed before the value is written rather than after: a deadline that landed
+		// on
+		// a lease which then failed to renew would be a key collected before it is due,
+		// while renewing for a write that does not land costs nothing at all.
+		return this.client.keepAliveLease(lease) ? lease : EtcdClient.NO_LEASE;
 	}
 
 	@Override
@@ -479,7 +522,8 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 				return false;
 			}
 			EtcdClient.Write written = this.client.putIfUnchanged(etcdKey, live.kv().modRevision(),
-					live.envelope().withExpireAt(Envelope.NO_EXPIRY).encode(), EtcdClient.NO_LEASE);
+					live.envelope().withDeadline(Envelope.NO_EXPIRY, Envelope.NO_LEASE_TTL).encode(),
+					EtcdClient.NO_LEASE);
 			if (written.written()) {
 				this.client.revokeLeaseQuietly(live.kv().lease());
 				return true;
@@ -550,6 +594,7 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 			long revision = 0;
 			long lease = EtcdClient.NO_LEASE;
 			long expireAtMillis = Envelope.NO_EXPIRY;
+			long leaseTtlSeconds = Envelope.NO_LEASE_TTL;
 			RedisValue current = null;
 			if (kv != null) {
 				revision = kv.modRevision();
@@ -566,6 +611,7 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 					current = envelope.requiredValue();
 					lease = kv.lease();
 					expireAtMillis = envelope.expireAtMillis();
+					leaseTtlSeconds = envelope.leaseTtlSeconds();
 				}
 				// A tombstone is an absent key whose revision still guards the write, so
 				// what replaces it cannot overwrite a value written in the meantime.
@@ -577,11 +623,12 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 			if (batched.vanished()) {
 				lease = EtcdClient.NO_LEASE;
 				expireAtMillis = Envelope.NO_EXPIRY;
+				leaseTtlSeconds = Envelope.NO_LEASE_TTL;
 			}
 			RedisValue write = batched.value();
 			if (write != null) {
 				EtcdClient.Write written = this.client.putIfUnchanged(etcdKey, revision,
-						Envelope.of(write, expireAtMillis).encode(), lease);
+						Envelope.of(write, expireAtMillis, leaseTtlSeconds).encode(), lease);
 				if (written.written()) {
 					return;
 				}

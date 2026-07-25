@@ -72,9 +72,16 @@ research; if you need them again, unzip
 - **020** was done 2026-07-25, by batching rather than by the key-per-member layout it also
   weighed: the callers of one adapter now queue at a key (`KeyQueues`) and whoever holds it
   applies everything queued in one transaction. At 256 writers to one bucket that is 0.010 etcd
-  calls per write instead of 15, and none lost instead of 19%. It leaves 019 untouched — a save
-  still costs 12 raft writes — and it leaves the *size* of a bucket untouched, which is the one
-  thing a key per member would still address.
+  calls per write instead of 15, and none lost instead of 19%. It left 019 untouched, and it
+  leaves the *size* of a bucket untouched, which is the one thing a key per member would still
+  address.
+- **019** was done 2026-07-25. A `PEXPIREAT` that asks for the TTL the key's lease already
+  renews to now renews that lease (`LeaseKeepAlive`, which etcd serves without a raft proposal)
+  instead of granting one and revoking the other, so a session save costs **6 raft writes
+  instead of 12** — 28.6 ms down to 8.84 ms, and 20.7 request cycles per second up to 51.8.
+  The TTL a lease renews to travels in the value, which raised the envelope's format byte to 2
+  — nothing has been released, so format 1 is refused rather than still read. The two
+  remaining ideas of §11.7 are unaffected.
 
 ## Definition of done (every task)
 
@@ -109,6 +116,6 @@ research; if you need them again, unzip
 | 016 | etcd backend (shared, so several adapters serve the same sessions) | done |
 | 017 | Health indicator for a backend that can be unreachable | not started |
 | 018 | Measure what the etcd backend costs | done |
-| 019 | Cut the raft writes a session save costs | not started |
+| 019 | Cut the raft writes a session save costs | done |
 | 020 | A contended key must not fail a session save | done |
 | 021 | A write etcd is too small for deserves its own error | not started |

@@ -1,15 +1,23 @@
 package am.ik.redis.adapter.etcd;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import am.ik.redis.adapter.store.ByteArrayKey;
@@ -46,17 +54,22 @@ class EtcdKeyValueStoreTest {
 
 	private EtcdKeyValueStore store;
 
+	/** The same etcd, read directly, for what the SPI does not expose: leases. */
+	private EtcdClient etcd;
+
 	private RecordingListener listener;
 
 	@BeforeEach
 	void setUp(TestInfo test) {
 		this.store = store(prefix(test));
+		this.etcd = EtcdClient.builder().endpoints(List.of(EtcdCluster.endpoint())).build();
 		this.listener = new RecordingListener();
 		this.store.addKeyEventListener(this.listener);
 	}
 
 	@AfterEach
 	void tearDown() {
+		this.etcd.close();
 		this.store.close();
 	}
 
@@ -240,6 +253,66 @@ class EtcdKeyValueStoreTest {
 		assertThat(this.store.persist(b("k"))).isTrue();
 		assertThat(this.store.getExpireAt(b("k"))).isNull();
 		assertThat(this.store.exists(b("k"))).isTrue();
+	}
+
+	/**
+	 * Pushing the same TTL out again is what Spring Session does to three keys on every
+	 * request, and it renews the lease the key is already on rather than moving it onto a
+	 * freshly granted one. etcd renews a lease without committing anything to raft, so
+	 * this is the difference between one raft write and three; that the lease id has not
+	 * changed and that no lease has appeared is what says the renewal happened.
+	 */
+	@Test
+	void expireAtRenewsTheLeaseWhenTheDeadlineNeedsTheSameTtl() {
+		this.store.append(b("k"), b("v"));
+		this.store.expireAt(b("k"), this.store.currentTimeMillis() + 60_000);
+		long lease = leaseOf(b("k"));
+		Set<Long> granted = leases();
+		assertThat(lease).isNotZero();
+
+		long deadline = this.store.currentTimeMillis() + 60_000;
+		assertThat(this.store.expireAt(b("k"), deadline)).isTrue();
+
+		assertThat(leaseOf(b("k"))).isEqualTo(lease);
+		assertThat(this.store.getExpireAt(b("k"))).isEqualTo(deadline);
+		// Nothing was granted, so nothing can have been left behind holding nothing
+		// either.
+		assertThat(leases()).isSubsetOf(granted);
+	}
+
+	/**
+	 * A deadline that really needs a different lease gets one, and the lease it leaves
+	 * behind is revoked rather than left to age out.
+	 */
+	@Test
+	void expireAtGrantsANewLeaseWhenTheTtlChanges() {
+		this.store.append(b("k"), b("v"));
+		this.store.expireAt(b("k"), this.store.currentTimeMillis() + 60_000);
+		long lease = leaseOf(b("k"));
+
+		assertThat(this.store.expireAt(b("k"), this.store.currentTimeMillis() + 600_000)).isTrue();
+
+		long replacement = leaseOf(b("k"));
+		assertThat(replacement).isNotZero().isNotEqualTo(lease);
+		assertThat(leases()).contains(replacement).doesNotContain(lease);
+	}
+
+	/**
+	 * A key put back on no lease at all is the case a renewal must not be tempted by:
+	 * {@code PERSIST} then {@code PEXPIREAT} has to grant.
+	 */
+	@Test
+	void expireAtAfterPersistGrantsALeaseAgain() {
+		this.store.append(b("k"), b("v"));
+		this.store.expireAt(b("k"), this.store.currentTimeMillis() + 60_000);
+		this.store.persist(b("k"));
+		assertThat(leaseOf(b("k"))).isZero();
+
+		long deadline = this.store.currentTimeMillis() + 60_000;
+		assertThat(this.store.expireAt(b("k"), deadline)).isTrue();
+
+		assertThat(leaseOf(b("k"))).isNotZero();
+		assertThat(this.store.getExpireAt(b("k"))).isEqualTo(deadline);
 	}
 
 	@Test
@@ -620,6 +693,44 @@ class EtcdKeyValueStoreTest {
 	}
 
 	// --- helpers -----------------------------------------------------------------------
+
+	/**
+	 * Returns the etcd lease a key is attached to, which is what says whether a deadline
+	 * was pushed out by renewing the lease that was there or by granting another.
+	 * @param key the Redis key
+	 * @return the lease id, or {@code 0} if the key is on no lease
+	 */
+	private long leaseOf(byte[] key) {
+		byte[] etcdKey = b(this.store.keyPrefix() + new String(key, UTF_8));
+		return requireNonNull(this.etcd.get(etcdKey), "no such key").lease();
+	}
+
+	/**
+	 * Returns every lease the cluster currently holds. A lease this backend granted and
+	 * then left holding nothing would show up here, which is the leak a renewal must not
+	 * introduce.
+	 * @return the lease ids
+	 */
+	private Set<Long> leases() {
+		HttpRequest request = HttpRequest.newBuilder(URI.create(EtcdCluster.endpoint() + "/v3/lease/leases"))
+			.POST(HttpRequest.BodyPublishers.ofString("{}"))
+			.build();
+		try {
+			HttpResponse<String> response = HttpClient.newHttpClient()
+				.send(request, HttpResponse.BodyHandlers.ofString());
+			return Json.array(Json.parseObject(response.body()).get("leases"))
+				.stream()
+				.map(lease -> Json.integer(requireNonNull(Json.object(lease)).get("ID"), 0L))
+				.collect(Collectors.toSet());
+		}
+		catch (IOException e) {
+			throw new UncheckedIOException(e);
+		}
+		catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException(e);
+		}
+	}
 
 	private static byte[] b(String text) {
 		return text.getBytes(UTF_8);

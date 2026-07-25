@@ -125,8 +125,15 @@ class BackendSpiPerformanceTests {
 		}, () -> etcd.append(shadow, new byte[0]));
 		count("PEXPIREAT, session with no TTL yet", () -> {
 		}, () -> etcd.expireAt(session, deadline));
-		count("PEXPIREAT, session that already has one", () -> {
-		}, () -> etcd.expireAt(session, deadline + 1000));
+		// The same TTL pushed out again is what Spring Session issues on every request,
+		// and
+		// the case the lease is renewed for; a TTL that really changed is the other one,
+		// and
+		// is what every PEXPIREAT used to cost.
+		count("PEXPIREAT, same TTL pushed out again", () -> {
+		}, () -> etcd.expireAt(session, etcd.currentTimeMillis() + SESSION_TTL.toMillis()));
+		count("PEXPIREAT, a TTL that really changed", () -> {
+		}, () -> etcd.expireAt(session, etcd.currentTimeMillis() + SESSION_TTL.toMillis() + 60_000));
 		count("PTTL", () -> {
 		}, () -> etcd.getExpireAt(session));
 		count("PERSIST", () -> {

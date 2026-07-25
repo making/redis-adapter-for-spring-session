@@ -303,6 +303,35 @@ final class EtcdClient implements AutoCloseable {
 	}
 
 	/**
+	 * Renews a lease, giving it the whole of the TTL it was granted with again.
+	 *
+	 * <p>
+	 * This is the cheap way to push a deadline out, and the reason is that etcd renews a
+	 * lease on the leader alone: no raft proposal is committed, where granting one and
+	 * revoking another are two. It is what makes a session touched on every request cost
+	 * one raft write instead of three.
+	 *
+	 * <p>
+	 * A lease that etcd no longer has is not an error there — the answer simply carries
+	 * no TTL — and it is not one here either: the key it held is gone with it, so the
+	 * caller grants a new lease and finds out on its next read.
+	 * @param lease the lease id
+	 * @return {@code true} if the lease is alive and now has its full TTL again
+	 */
+	boolean keepAliveLease(long lease) {
+		if (lease == NO_LEASE) {
+			return false;
+		}
+		// The gateway renders this endpoint's stream as a "result" wrapper, exactly as it
+		// does a watch's, because etcd's own API is a bidirectional stream: one request
+		// in,
+		// one answer out, and the stream ends when the request body does.
+		Map<String, Object> result = Json
+			.object(call("/v3/lease/keepalive", Json.write().integer("ID", lease).toString()).get("result"));
+		return result != null && Json.integer(result.get("TTL"), 0L) > 0;
+	}
+
+	/**
 	 * Revokes a lease, so that a key which no longer needs it does not leave one behind.
 	 * A lease this backend grants is attached to exactly one key, and it is only revoked
 	 * once that key has been moved off it or removed, so revoking never takes a key with

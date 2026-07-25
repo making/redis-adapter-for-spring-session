@@ -388,7 +388,8 @@ package-private class changes.
 ### 11.2 What a key holds, and expiry
 
 One Redis key is one etcd key under `<key-prefix><database>/`, holding an `Envelope`: a
-format byte, a type byte, the absolute deadline, then the value. Two mechanisms carry the
+format byte, a type byte, the absolute deadline, the TTL of the lease enforcing it, then the
+value. Two mechanisms carry the
 TTL and they are not redundant:
 
 - the **etcd lease** the key is attached to removes it when nobody comes back to it — this
@@ -399,11 +400,29 @@ TTL and they are not redundant:
   against, so a key is logically gone the moment it should be. A read that finds an overdue
   key removes it, and that removal is what announces the expiry.
 
-`expireAt` grants a new lease and revokes the old one after the write lands. Revoking
-matters: Spring Session sets the expiry on every request, and a lease left behind each time
-would pile up in etcd until it aged out. A lease this backend grants is only ever attached
-to one key, and is only revoked once that key has been moved off it, so revoking never
-takes a key with it.
+`expireAt` pushes a deadline out by **renewing** the lease the key is already on whenever
+that lease renews to the TTL the new deadline needs, and grants a new one only when it does
+not. etcd renews a lease on the leader alone — no raft proposal is committed for it — where
+granting one and revoking another are two proposals. Spring Session issues three
+`PEXPIREAT`s per save and always with the TTL it already used, so this is the difference
+between one raft write per deadline and three, and it is most of what a session save costs
+(§11.6).
+
+A lease renews to the TTL it was *granted* with, so which TTL that is has to be known — and
+the replica pushing the deadline out is not necessarily the one that granted the lease.
+It therefore travels **in the key**, beside the deadline, which raised the envelope's format
+byte — nothing is released, so the previous format is refused rather than read. The renewal
+is sent *before* the value is written, never after: a deadline that landed on a lease which then failed to renew would be
+a key collected before it is due, while renewing a lease for a write that does not land
+costs nothing at all.
+
+Only an exactly equal TTL renews. A longer lease would cover the deadline too, but it would
+leave a dead key on the cluster for as long as *it* has left rather than as long as the key
+was due — and being that bound is the whole of the lease's job. When a lease is granted the
+old one is revoked after the write lands. Revoking matters: Spring Session sets the expiry
+on every request, and a lease left behind each time would pile up in etcd until it aged out.
+A lease this backend grants is only ever attached to one key, and is only revoked once that
+key has been moved off it, so revoking never takes a key with it.
 
 ### 11.3 Key events come from a watch
 
@@ -484,7 +503,7 @@ enough: each one found something.
 
 | Suite | What only a real etcd (or a real outage) can say |
 |---|---|
-| `EtcdKeyValueStoreTest` | the SPI contract, lease-driven expiry, the silence of a rename, two stores as two replicas, concurrent writes. Found the retry livelock (§11.4), and now holds the 256-writer case that compare-and-swap alone lost a fifth of. |
+| `EtcdKeyValueStoreTest` | the SPI contract, lease-driven expiry, the silence of a rename, two stores as two replicas, concurrent writes. Found the retry livelock (§11.4); holds the 256-writer case that compare-and-swap alone lost a fifth of, and that pushing the same TTL out again leaves the key on the lease it is already on with no new lease anywhere in the cluster (§11.2). |
 | `EtcdWatchReconnectTest` | a removal **and** an expiry that happen while the watch is down are announced when it comes back. Uses a `TcpProxy` the test can blackhole, because etcd has to stay up to be written to while a store is blind. |
 | `EtcdEndpointFailoverTest` | a member that stops serving is passed over; a store built while the whole cluster is away still serves once it is back. |
 | `EtcdAuthenticationTest` | a protected cluster, and a token the cluster has forgotten. Found that a **watch** is refused *inside its stream* (HTTP 200, then a cancellation saying the token is invalid), so the token has to be discarded from there or the watch reopens forever with a dead one and the application is never told another session ended. |
@@ -510,12 +529,14 @@ module that is excluded from an ordinary build (`./mvnw test -Pperformance -pl
 redis-adapter-for-spring-session-server`). Three numbers from it belong in the design itself,
 because they are the design's own consequences rather than one machine's:
 
-- **A session save is 12 raft writes**, of which 9 come from the three `PEXPIREAT`s Spring
-  Session issues per save — a `PEXPIREAT` on a key that already has a TTL grants a lease,
-  writes the value and revokes the old lease. Session writes per second are therefore about
-  the cluster's raft write rate divided by twelve, and nothing else matters as much.
+- **A session save is 6 raft writes**, one per key written, because the three `PEXPIREAT`s
+  Spring Session issues per save renew the lease each key is already on rather than replacing
+  it (§11.2). It was 12 before that, 9 of them the leases; the change measured 28.6 ms per
+  save down to 8.84 ms and 20.7 request cycles per second up to 51.8. Session writes per
+  second are therefore about the cluster's raft write rate divided by six, and nothing else
+  matters as much.
 - **Reads are almost free and writes are not**: one `Range` against `Txn`-plus-lease-work, or
-  0.5 ms against 15 ms on a single-member container whose commits take 3 ms.
+  0.2 ms against 9 ms on a single-member container whose commits take 3.7 ms.
 - **Contention on one key costs less the more of it there is** — now. It is the one thing the
   measurement found that the tests could not, because every correctness suite wrote from a
   handful of threads: at 256 concurrent writers to one expirations bucket the calls per
@@ -529,11 +550,6 @@ because they are the design's own consequences rather than one machine's:
 - **No health indicator yet.** README promises that "a backend that can be unreachable
   contributes a health indicator of its own"; `EtcdKeyValueStore.checkHealth()` is the
   method one would be built on. See `.todo/017-etcd-health-indicator.md`.
-- **No lease reuse across `expireAt` calls** — *decided, and it should be built.* The
-  measurement above puts a number on what grant-and-revoke costs: three raft writes per
-  `PEXPIREAT`, three `PEXPIREAT`s per save, so two thirds of a save's writes. A
-  `LeaseKeepAlive` renews a lease for its original TTL without a raft write, which is exactly
-  the case Spring Session hits on every request. `.todo/019-etcd-fewer-raft-writes.md`.
 - **No field-granular hashes** — *decided, and it should not be built.* Rewriting a whole
   1 KB hash to change one field measured 1.33 ms against 1.08 ms to write it new: inside the
   noise of a raft commit, and only about a millisecond apart at 100 KB. Keys per field would
