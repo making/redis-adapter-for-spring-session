@@ -104,8 +104,8 @@ facade) and `jspecify` (nullness annotations) — the two already on the current
 Suggested packages (base `am.ik.redis.adapter`):
 
 - `am.ik.redis.adapter.store` — the **SPI only**: `KeyValueStore`, `RedisValue` (sealed:
-  string/hash/set/zset) with `ByteArrayKey`, `KeyEventListener`,
-  `TypeMismatchException`. The in-memory reference implementation does **not** live here; it
+  string/hash/set/zset) with `ByteArrayKey`, `KeyEventListener`, `TypeMismatchException`,
+  `ValueTooLargeException`. The in-memory reference implementation does **not** live here; it
   is a separate module (`am.ik.redis.adapter.inmemory`, see §6).
 - `am.ik.redis.adapter.protocol` — `RespReader`, `RespWriter`, RESP element model.
 - `am.ik.redis.adapter.command` — `CommandDispatcher`, `CommandContext`, per-command
@@ -544,6 +544,14 @@ because they are the design's own consequences rather than one machine's:
   and applying the queue as one batch (§11.4) turned that into 0.010 calls per write and
   nothing lost — 247 → 22,290 writes per second. What a batch has to answer is now covered by
   a test, so the direction cannot silently reverse.
+- **There is a ceiling on one value, and it has an error of its own.** etcd refuses a request
+  over `--max-request-bytes` (1.5 MiB by default) and its gateway refuses one over its own
+  message limit (2 MiB) before etcd sees it; either way nothing is written and no retry can
+  change that. A refusal whose text is about size is raised as the SPI's
+  `ValueTooLargeException` rather than as an `EtcdException`, and the command layer answers it
+  `ERR value too large for the backend` instead of `ERR internal error` — the difference
+  between an application being told to hold less in the session and being sent looking for a
+  bug in the adapter. The in-memory backend has no such limit and grows no fake one.
 
 ### 11.7 What is deliberately not there
 

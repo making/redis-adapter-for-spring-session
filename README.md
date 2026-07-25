@@ -428,9 +428,11 @@ you can take your own.
   queues behind itself. More application instances, or more connections, multiply it.
 - **Keep session attributes in the tens of kilobytes.** Below that the raft commit dominates and
   the bytes are noise — a 100 KB session costs a few milliseconds more than a 1 KB one. Above
-  etcd's `--max-request-bytes` (1.5 MiB by default) the write is refused outright and the client
-  is told `ERR internal error`, with etcd's reason in the adapter's log. A cluster also has a
-  total size limit (`--quota-backend-bytes`, 2 GiB by default).
+  etcd's `--max-request-bytes` (1.5 MiB by default) the write is refused outright: the client is
+  told `ERR value too large for the backend`, which is the adapter saying the session did not
+  fit and that repeating the write will not help, and etcd's own reason is in the adapter's log.
+  Nothing is written, so the application sees the save fail rather than a session it cannot read
+  back. A cluster also has a total size limit (`--quota-backend-bytes`, 2 GiB by default).
 - **One key is contended by design**, and that is handled: every session expiring in the same
   minute joins that minute's set, so the adapter applies the writes waiting for one key together,
   in a single etcd transaction, instead of letting them compete. Hundreds of writers at once
@@ -485,7 +487,7 @@ core module only. It never sees RESP, connections or Spring.
 | `addKeyEventListener(KeyEventListener)` | Registers the listener the adapter turns into keyspace notifications. |
 | `close()` | Releases whatever the store holds; must be idempotent. |
 
-Four rules matter more than the signatures:
+Five rules matter more than the signatures:
 
 - **Expiry is the store's job, and it must be announced.** Every operation honours passive
   expiration: touching a key whose deadline has passed removes it, fires
@@ -496,6 +498,12 @@ Four rules matter more than the signatures:
   `SessionDeletedEvent` and `SessionExpiredEvent` are made of nothing else.
 - **Bytes are opaque.** Keys, field names and members are compared by value (`ByteArrayKey` is
   there for that); payload bytes are returned exactly as they arrived and are never parsed.
+- **Two failures have names of their own.** `TypeMismatchException` says the key holds another
+  kind of value, and `ValueTooLargeException` says the value is bigger than this backend will
+  take; the command layer answers them with `WRONGTYPE` and `ERR value too large for the backend`
+  respectively. Both tell the client something it can act on, which is why they are not left to
+  the generic path — anything else a backend throws becomes `ERR internal error` and is logged
+  with its stack trace. A backend with no size limit never throws the second one.
 - **A distributed backend has to carry the events across nodes.** If an adapter replica other than
   the one holding a client's subscription expires a key, that expiry still has to reach the
   subscriber. `KeyEventListener` is the seam where a backend plugs in its own watch or notify

@@ -26,6 +26,7 @@ import am.ik.redis.adapter.store.RedisValue;
 import am.ik.redis.adapter.store.SetValue;
 import am.ik.redis.adapter.store.StringValue;
 import am.ik.redis.adapter.store.TypeMismatchException;
+import am.ik.redis.adapter.store.ValueTooLargeException;
 import am.ik.redis.adapter.store.ZSetValue;
 import org.jspecify.annotations.Nullable;
 import org.junit.jupiter.api.AfterEach;
@@ -134,6 +135,38 @@ class EtcdKeyValueStoreTest {
 		this.store.append(b("s"), b("v"));
 
 		assertThatThrownBy(() -> this.store.hset(b("s"), fields("a", "1"))).isInstanceOf(TypeMismatchException.class);
+	}
+
+	/**
+	 * A cluster has a ceiling on the size of one request — etcd's own
+	 * {@code --max-request-bytes}, 1.5 MiB by default — and a value over it is the one
+	 * failure here that is about the value rather than about the store: nothing is
+	 * unreachable and no retry can make it land. It is therefore raised as the SPI's
+	 * exception for exactly that, so the command layer can tell the caller what to do
+	 * about it instead of reporting a fault of the adapter's.
+	 */
+	@Test
+	void aValueTooBigForTheClusterIsRefusedAsSuchAndWritesNothing() {
+		byte[] oversized = new byte[1_600 * 1024];
+
+		assertThatThrownBy(() -> this.store.hset(b("big"), Map.of(b("sattr:blob"), oversized)))
+			.isInstanceOf(ValueTooLargeException.class)
+			.hasMessageContaining("etcd refused");
+		assertThat(this.store.exists(b("big"))).isFalse();
+	}
+
+	/**
+	 * The other ceiling, which a deployment meets when it is the lower of the two: the
+	 * gateway refuses a message over the size its own gRPC client accepts (2 MiB) before
+	 * etcd ever sees it, and says so in words of its own. Both are the same answer to the
+	 * caller.
+	 */
+	@Test
+	void aValueOverTheGatewaysOwnMessageLimitIsRefusedAsTooLargeToo() {
+		byte[] oversized = new byte[4_000 * 1024];
+
+		assertThatThrownBy(() -> this.store.hset(b("huge"), Map.of(b("sattr:blob"), oversized)))
+			.isInstanceOf(ValueTooLargeException.class);
 	}
 
 	// --- SET ---------------------------------------------------------------------------

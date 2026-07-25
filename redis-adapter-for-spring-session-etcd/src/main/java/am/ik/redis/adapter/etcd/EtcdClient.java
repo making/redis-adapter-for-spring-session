@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.net.ssl.SSLContext;
 
+import am.ik.redis.adapter.store.ValueTooLargeException;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -419,8 +420,9 @@ final class EtcdClient implements AutoCloseable {
 	 * @param path the gateway path
 	 * @param body the request body
 	 * @return the parsed response
+	 * @throws ValueTooLargeException if the request was refused for its size
 	 * @throws EtcdException if no endpoint could be reached, or if etcd refused the
-	 * request
+	 * request for any other reason
 	 */
 	private Map<String, Object> call(String path, String body) {
 		HttpResponse<String> response = send(path, body, HttpResponse.BodyHandlers.ofString(), this.requestTimeout);
@@ -442,7 +444,28 @@ final class EtcdClient implements AutoCloseable {
 			}
 			message = Objects.requireNonNullElse(Json.text(reparsed.get("message")), retried.body());
 		}
+		if (isTooLarge(message)) {
+			throw new ValueTooLargeException("etcd refused " + path + ": " + message);
+		}
 		throw new EtcdException("etcd refused " + path + ": " + message);
+	}
+
+	/**
+	 * Reports whether a refusal was about the size of the request rather than about the
+	 * store.
+	 *
+	 * <p>
+	 * There are two of them, and a deployment meets whichever limit is lower: etcd
+	 * refuses a request over its {@code --max-request-bytes} (1.5 MiB by default), and
+	 * the gateway refuses one over the message size its own gRPC client accepts, before
+	 * etcd ever sees it. The text is matched rather than the gRPC status code, which is
+	 * {@code ResourceExhausted} for a cluster that is simply out of space as well — that
+	 * one is a store failure and belongs on the generic path.
+	 * @param message what etcd, or the gateway, said
+	 * @return {@code true} if the request was refused for its size
+	 */
+	private static boolean isTooLarge(String message) {
+		return message.contains("request is too large") || message.contains("message larger than max");
 	}
 
 	private <T> HttpResponse<T> send(String path, String body, HttpResponse.BodyHandler<T> handler,

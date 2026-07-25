@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Set;
 
 import am.ik.redis.adapter.store.TypeMismatchException;
+import am.ik.redis.adapter.store.ValueTooLargeException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -33,9 +34,10 @@ import org.slf4j.LoggerFactory;
  * <p>
  * Every failure mode ends in a reply rather than a broken connection: a
  * {@link RedisCommandException} carries its own wire text, a
- * {@link TypeMismatchException} from the backend becomes {@code WRONGTYPE}, and anything
- * else becomes {@code ERR internal error} and is logged with its stack trace. Only an
- * {@link IOException} — a dead transport — propagates.
+ * {@link TypeMismatchException} from the backend becomes {@code WRONGTYPE}, a
+ * {@link ValueTooLargeException} becomes {@code ERR value too large for the backend}, and
+ * anything else becomes {@code ERR internal error} and is logged with its stack trace.
+ * Only an {@link IOException} — a dead transport — propagates.
  *
  * <p>
  * Instances are immutable and shared by every connection.
@@ -45,6 +47,13 @@ public final class CommandDispatcher {
 	private static final Logger logger = LoggerFactory.getLogger(CommandDispatcher.class);
 
 	private static final String WRONG_TYPE = "WRONGTYPE Operation against a key holding the wrong kind of value";
+
+	/**
+	 * Redis has no error of its own for this — its own limit is 512 MB and it would have
+	 * taken the value — so the message is ours, and it says the two things a caller has
+	 * to know: the value did not fit, and no retry will change that.
+	 */
+	private static final String VALUE_TOO_LARGE = "ERR value too large for the backend";
 
 	private static final String NO_AUTH = "NOAUTH Authentication required.";
 
@@ -103,6 +112,13 @@ public final class CommandDispatcher {
 		catch (TypeMismatchException e) {
 			logger.debug("Command '{}' hit a type mismatch: {}", name, e.toString());
 			context.writer().writeError(WRONG_TYPE);
+		}
+		catch (ValueTooLargeException e) {
+			// Worth an operator's attention — a session that stopped fitting is a
+			// deployment problem — but not a stack trace: nothing here failed, the value
+			// is simply too big for the store that was chosen.
+			logger.warn("Command '{}' was refused a value the backend will not store: {}", name, e.getMessage());
+			context.writer().writeError(VALUE_TOO_LARGE);
 		}
 		catch (RuntimeException e) {
 			logger.warn("Command '{}' failed unexpectedly", name, e);

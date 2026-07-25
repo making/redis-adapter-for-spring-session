@@ -4,6 +4,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import am.ik.redis.adapter.store.TypeMismatchException;
+import am.ik.redis.adapter.store.ValueTooLargeException;
 import org.junit.jupiter.api.Test;
 
 import static am.ik.redis.adapter.command.TestCommandContext.argv;
@@ -84,6 +85,22 @@ class CommandDispatcherTest {
 
 		assertThat(this.context.replies())
 			.isEqualTo("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+	}
+
+	/**
+	 * A value the backend will not take is the caller's to fix, so it must not arrive as
+	 * {@code internal error} — that sends whoever is holding the exception looking for a
+	 * bug in the adapter.
+	 */
+	@Test
+	void turnsAValueTheBackendWillNotStoreIntoAnErrorThatSaysSo() throws Exception {
+		CommandDispatcher dispatcher = dispatcherFor((connection, argv) -> {
+			throw new ValueTooLargeException("etcd refused /v3/kv/txn: etcdserver: request is too large");
+		});
+
+		dispatcher.dispatch(this.context, argv("PING"));
+
+		assertThat(this.context.replies()).isEqualTo("-ERR value too large for the backend\r\n");
 	}
 
 	@Test

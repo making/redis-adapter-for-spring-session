@@ -30,6 +30,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Drives a stock Spring Session application against the adapter backed by a real etcd.
@@ -220,6 +221,24 @@ class EtcdBackendEndToEndTests {
 			assertThat(session).isInstanceOf(HashValue.class);
 			assertThat(((HashValue) session).fields()).isNotEmpty();
 		}
+	}
+
+	/**
+	 * Where a session stops fitting, seen from the application rather than from the
+	 * store. etcd refuses a request over its {@code --max-request-bytes} and no retry can
+	 * change that, so what comes back through the client has to say so — an
+	 * {@code internal
+	 * error} would send whoever is holding this exception looking for a bug in the
+	 * adapter, when what the application has to do is keep less in the session.
+	 */
+	@Test
+	void aSessionAttributeBiggerThanEtcdAcceptsIsRefusedWithAnErrorThatSaysWhy() {
+		RedisSession session = this.sessions.createSession();
+		session.setAttribute("blob", new byte[1_600 * 1024]);
+
+		assertThatThrownBy(() -> this.sessions.save(session)).rootCause()
+			.hasMessage("ERR value too large for the backend");
+		assertThat(this.sessions.findById(session.getId())).isNull();
 	}
 
 	private KeyValueStore store() {

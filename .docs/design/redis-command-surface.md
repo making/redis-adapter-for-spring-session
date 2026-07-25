@@ -170,6 +170,9 @@ declares `ConfigureRedisAction.NO_OP`, but we should not require that.)
 - Principal set has no TTL; dangling ids are tolerated (`findByIndexNameAndIndexValue`
   re-loads each id and drops nulls).
 - `PUBLISH` with zero subscribers must not error; returns `0`.
+- A write the backend will not take for its size → `ERR value too large for the backend`
+  (nothing was written, and repeating it cannot help; Spring Session surfaces it as a failed
+  save). Redis has no equivalent error — its own limit is 512 MB — so the message is ours.
 - Keys/fields are UTF-8-decodable; values are opaque — never assume text.
 - Back the store by a value-equal key wrapper, never raw `byte[]`.
 

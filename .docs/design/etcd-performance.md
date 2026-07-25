@@ -270,10 +270,12 @@ Where it stops fitting, with etcd's default `--max-request-bytes` (1.5 MiB):
 
 Two things worth knowing about that. The limit applies to the request etcd decodes, not to
 the JSON the adapter sends, so the base64 the value travels as (four bytes on the wire per
-three of session) costs bandwidth but does not lower the ceiling. And what the application
-sees is `ERR internal error`, with etcd's reason in the adapter's log — accurate, since the
-write did not happen, but it does not say "too big"; `.todo/021` covers giving it a message
-of its own.
+three of session) costs bandwidth but does not lower the ceiling. And both refusals now
+reach the application as `ERR value too large for the backend`, with etcd's reason in the
+adapter's log: the client layer raises the SPI's `ValueTooLargeException` for a refusal
+whose text is about size, and the command layer gives that an error of its own rather than
+`ERR internal error` — which was accurate, since the write did not happen, but sent whoever
+was holding the exception looking for a bug in the adapter instead of for a smaller session.
 
 ## What this says about the two optimizations the design left out
 
