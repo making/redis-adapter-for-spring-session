@@ -41,6 +41,9 @@ public record RedisAdapterProperties(@DefaultValue("0.0.0.0") String bindAddress
 	/** The name of the bundled in-memory backend, and the default. */
 	public static final String IN_MEMORY_BACKEND = "in-memory";
 
+	/** The name of the etcd backend, the bundled one that several adapters can share. */
+	public static final String ETCD_BACKEND = "etcd";
+
 	public RedisAdapterProperties {
 		if (port < 0 || port > 65535) {
 			throw new IllegalArgumentException("redis-adapter.port must be between 0 and 65535: " + port);

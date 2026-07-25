@@ -61,6 +61,7 @@ class ReadmeExamplesTests {
 		examples.put("app-tls", "readme/application.properties");
 		examples.put("server-settings", "readme/server.properties");
 		examples.put("server-in-memory", "readme/server.properties");
+		examples.put("server-etcd", "readme/server.properties");
 		examples.put("server-tls", "readme/server.properties");
 		examples.put("server-env", "readme/server.env");
 		examples.put("backend-selection", "readme/server.properties");
@@ -132,6 +133,7 @@ class ReadmeExamplesTests {
 		List<String> bound = new ArrayList<>();
 		bound.addAll(propertyNames("redis-adapter", RedisAdapterProperties.class));
 		bound.addAll(propertyNames("redis-adapter.in-memory", InMemoryBackendProperties.class));
+		bound.addAll(propertyNames("redis-adapter.etcd", EtcdBackendProperties.class));
 		assertThat(documented).containsExactlyInAnyOrderElementsOf(bound);
 	}
 

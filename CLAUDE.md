@@ -11,11 +11,12 @@ repository.
 ```
 
 ## Design Requirements
-- **Package**: `am.ik.redis.adapter` - Main package (core module); the in-memory backend module uses `am.ik.redis.adapter.inmemory` and the Spring Boot server module uses `am.ik.redis.adapter.boot`. A package is never split across two modules.
+- **Package**: `am.ik.redis.adapter` - Main package (core module); the in-memory backend module uses `am.ik.redis.adapter.inmemory`, the etcd backend module `am.ik.redis.adapter.etcd`, and the Spring Boot server module `am.ik.redis.adapter.boot`. A package is never split across two modules.
 - **Modules**:
   - `redis-adapter-for-spring-session-core` - dependency-free core: the `KeyValueStore` SPI plus the protocol, command, pubsub and server layers. It never contains a concrete `KeyValueStore` implementation.
   - `redis-adapter-for-spring-session-inmemory` - the bundled in-memory reference backend. Depends on `core` only, exactly like any future external backend.
-  - `redis-adapter-for-spring-session-server` - Spring Boot server. Depends on `core` + `inmemory` and hosts the end-to-end compatibility tests.
+  - `redis-adapter-for-spring-session-etcd` - the etcd backend, the shared one. Depends on `core` only and has the same runtime dependencies: it speaks etcd's v3 API as JSON over the gRPC gateway with the JDK's `HttpClient`, so no gRPC stack reaches the server. Its tests need a Docker daemon (Testcontainers).
+  - `redis-adapter-for-spring-session-server` - Spring Boot server. Depends on `core` + `inmemory` + `etcd`, holds the Spring side of both backends (`*KeyValueStoreFactory`, `*BackendProperties`), and hosts the end-to-end compatibility tests.
 
 ## Implemented Features
 
@@ -28,6 +29,10 @@ repository.
   from a Spring Boot `SslBundle`, including certificate rotation without a restart.
 - The Spring Boot server module: `redis-adapter.*` properties, lifecycle, actuator health and
   metrics, and backend selection by name at startup.
+- Two backends: in-memory (default, single-node) and etcd (shared, so several adapters serve the
+  same sessions and a key one of them expires is announced to the clients of all of them).
+  `.docs/design/architecture.md` §11 is the etcd design, including why the events come from a watch
+  and what a tombstone is for.
 
 Two rules constrain anything added here:
 

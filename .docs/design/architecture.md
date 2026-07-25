@@ -23,9 +23,10 @@ Benefits:
 - Only the **minimal subset of Redis commands** that Spring Session actually uses has to
   be implemented — not all of Redis.
 
-This library ships the adapter core plus an **in-memory backend** (`ConcurrentHashMap`).
-Other backends are added later by implementing one SPI; they are out of scope here and are
-never named in this repository.
+This library ships the adapter core, an **in-memory backend** (`ConcurrentHashMap`) and an
+**etcd backend** (§11). The in-memory one is the reference and the default; etcd is the
+shared one, and it is what makes the horizontal scaling of §7 real. Any further backend is
+added the same way, by implementing one SPI from its own module.
 
 ## 2. Chosen shape: a standalone RESP server on virtual threads
 
@@ -129,8 +130,13 @@ Redis-agnostic. Sketch (final signatures decided in task 002):
   touching a key whose TTL has elapsed evicts it and fires the expiry event.
 - `KeyEventListener { onExpired(byte[] key); onDeleted(byte[] key); }` — the store calls
   these; the command/pubsub layer turns them into `__keyevent@<db>__:expired` / `:del`
-  notifications. **Expiry/delete notifications are emitted synchronously at the moment of
-  removal** — Spring Session's `SessionExpiredEvent`/`SessionDeletedEvent` depend on them.
+  notifications. **A removal is never silent** — Spring Session's
+  `SessionExpiredEvent`/`SessionDeletedEvent` depend on them. The in-memory backend fires
+  them synchronously, inside the removal. A shared backend fires them from wherever it
+  learns about the removal — for etcd, its watch, a round trip later (§11.3) — because that
+  is the only way a replica hears about a key another replica removed. Either way the
+  notification is never dropped, and a client sees it on a different connection from the
+  reply anyway.
 - The in-memory impl additionally runs a background **active expiry sweeper** on a virtual
   thread so keys that are never accessed still fire `expired` in bounded time.
 
@@ -192,8 +198,18 @@ Multi-module Maven (parent = current artifact, packaging `pom`):
   host them — it has no concrete backend, and a test dependency from `core` onto a backend
   module would create a Maven reactor cycle.
 
-Dependency direction is strictly acyclic: `inmemory → core`, and `server → core` +
-`server → inmemory`. Every KVS backend — the bundled in-memory one and any future external
+- **`redis-adapter-for-spring-session-etcd`** — the etcd backend (§11), added 2026-07-25.
+  Depends on `core` only, exactly as `inmemory` does, and has the same runtime deps
+  (`slf4j-api` + `jspecify`): it speaks etcd's v3 API as JSON over the gRPC gateway with the
+  JDK's `HttpClient`, so no gRPC stack, protobuf or Netty reaches the server. Test deps add
+  Testcontainers, because the backend is only worth anything if it works against a real
+  etcd. The Spring Boot side of it (`EtcdBackendProperties`,
+  `EtcdKeyValueStoreFactory`) lives in the `server` module, exactly like the in-memory
+  backend's, since `KeyValueStoreFactory` is a Spring concept and a package is never split
+  across two modules.
+
+Dependency direction is strictly acyclic: `inmemory → core`, `etcd → core`, and
+`server → core` + `server → inmemory` + `server → etcd`. Every KVS backend — the bundled in-memory one and any future external
 one — depends on `core` only and implements `KeyValueStore`; the in-memory backend is
 deliberately a peer of those future backends rather than a privileged part of `core`.
 
@@ -215,8 +231,7 @@ deliberately a peer of those future backends rather than a privileged part of `c
   replica B must reach a subscriber connected to replica A. That requires the *backend* to
   provide a cross-node watch/notify channel; the `KeyEventListener` seam is exactly where a
   distributed backend plugs that in. For the in-memory backend (single node) it is local
-  and trivial. This is documented for backend authors (task 011) and is not needed for the
-  in-memory deliverable.
+  and trivial. The etcd backend does it for real, from etcd's watch (§11.3).
 
 ## 8. Authentication and TLS
 
@@ -346,3 +361,119 @@ rotation — the adapter follows whatever bundle it was pointed at.
 
 All research files cite `file:line` in `/Users/toshiaki/git/spring-session` (Spring
 Session sources) and the extracted Spring Data Redis 4.1.0 sources.
+
+## 11. The etcd backend (2026-07-25)
+
+`redis-adapter-for-spring-session-etcd` keeps the sessions in an etcd cluster. It is the
+first *shared* backend, so it is where the promises of §7 are either kept or not.
+
+### 11.1 Transport: the gRPC gateway, not a client library
+
+etcd serves its whole v3 API as JSON over HTTP on the same client port as gRPC
+(`--enable-grpc-gateway`, on by default). The backend uses that with the JDK's
+`java.net.http.HttpClient`, rather than jetcd.
+
+Why: the six RPCs this backend needs (`kv/range`, `kv/txn`, `kv/deleterange`,
+`lease/grant`, `lease/revoke`, `watch`) are a small part of what a client library is for,
+while jetcd would add grpc-netty-shaded, protobuf and guava to a server whose core
+deliberately implements a RESP server without Netty — and would have to be given
+reachability metadata for the native image of task 014. The hard parts of this backend
+(what a removal means, what a rename must not announce, retry on a lost compare) are ours
+either way. The cost is a JSON reader/writer of our own (`Json`) and base64 on the wire.
+
+`EtcdClient` is the seam: if throughput or DNS discovery ever justifies gRPC, one
+package-private class changes.
+
+### 11.2 What a key holds, and expiry
+
+One Redis key is one etcd key under `<key-prefix><database>/`, holding an `Envelope`: a
+format byte, a type byte, the absolute deadline, then the value. Two mechanisms carry the
+TTL and they are not redundant:
+
+- the **etcd lease** the key is attached to removes it when nobody comes back to it — this
+  is what replaces the in-memory backend's sweeper, and it means abandoned sessions are
+  collected by etcd itself. Leases are whole seconds, so the lease is always rounded **up**:
+  a key is never collected before it is due;
+- the **deadline in the value** is exact to the millisecond and is what every read compares
+  against, so a key is logically gone the moment it should be. A read that finds an overdue
+  key removes it, and that removal is what announces the expiry.
+
+`expireAt` grants a new lease and revokes the old one after the write lands. Revoking
+matters: Spring Session sets the expiry on every request, and a lease left behind each time
+would pile up in etcd until it aged out. A lease this backend grants is only ever attached
+to one key, and is only revoked once that key has been moved off it, so revoking never
+takes a key with it.
+
+### 11.3 Key events come from a watch
+
+etcd does not say *why* a key was removed, and the difference between `SessionExpiredEvent`
+and `SessionDeletedEvent` is exactly that. So every watch asks for `prev_kv`, and the
+deadline in the envelope decides: overdue means `onExpired`, otherwise `onDeleted`.
+
+Events are delivered from the watch rather than from the call that caused the removal, which
+is what carries them across replicas — the point of a shared backend. A reconnect resumes
+from the revision after the last one seen; a compaction past that point is logged, and the
+watch starts again from now.
+
+The store reads etcd's current revision **as it is built** and the watch resumes from there,
+because a watch opened with no revision only streams what happens after its request arrives
+— everything between the store being built and that moment would go unannounced. That read
+is allowed to fail (a backend is created while the application starts whether or not it is
+the selected one, so an etcd that is briefly away must not take the server with it); the
+watch then starts from wherever etcd is when it answers, and the gap is logged at WARN.
+
+Two removals must announce **nothing**: a `RENAME`'s source (a `del` would be read as the
+session having been destroyed) and a set or sorted set that lost its last member. Neither
+can be expressed by deleting the key, because a delete is what every replica sees. They are
+therefore written as a **tombstone** — an envelope with no value — and then removed; a
+watcher that sees a tombstone go stays quiet, and every read treats one as an absent key.
+Every tombstone carries a short lease, so one left behind by a process that died mid-rename
+disappears on its own.
+
+### 11.4 Atomicity and contention
+
+Every read-modify-write is one etcd transaction guarded by the `mod_revision` the read
+returned, retried when the guard fails, so two replicas adding to one set cannot lose an
+update. `RENAME` is one transaction too (tombstone the source, write the destination),
+followed by removing the tombstone; the SPI already allows it not to be atomic across its
+two keys.
+
+Two things make retrying work rather than livelock, both found by the concurrency test
+rather than by reasoning:
+
+- the transaction that refuses a write **reads the key back in its failure branch**, so a
+  retry costs one round trip instead of two and the window it can lose in again is halved;
+- retries **back off** by a randomized, growing delay (capped at 50 ms). Spring Session has
+  one genuinely contended key — every session expiring in the same minute adds itself to
+  that minute's set — so this is the ordinary case.
+
+### 11.5 How it is proved
+
+Everything runs against a real etcd in a container (`quay.io/coreos/etcd:v3.7.1`, pinned so a
+failure is reproducible). Three of these suites exist because reasoning about them was not
+enough: each one found something.
+
+| Suite | What only a real etcd (or a real outage) can say |
+|---|---|
+| `EtcdKeyValueStoreTest` | the SPI contract, lease-driven expiry, the silence of a rename, two stores as two replicas, concurrent writes. Found the retry livelock (§11.4). |
+| `EtcdWatchReconnectTest` | a removal **and** an expiry that happen while the watch is down are announced when it comes back. Uses a `TcpProxy` the test can blackhole, because etcd has to stay up to be written to while a store is blind. |
+| `EtcdEndpointFailoverTest` | a member that stops serving is passed over; a store built while the whole cluster is away still serves once it is back. |
+| `EtcdAuthenticationTest` | a protected cluster, and a token the cluster has forgotten. Found that a **watch** is refused *inside its stream* (HTTP 200, then a cancellation saying the token is invalid), so the token has to be discarded from there or the watch reopens forever with a dead one and the application is never told another session ended. |
+| `EtcdBackendEndToEndTests` (server) | stock Spring Session over Lettuce: expiry reaching `SessionExpiredEvent` through etcd's lease and watch, and a session another adapter removed reaching this one's subscriber. |
+| `EtcdBackendTlsTests` (server) | `redis-adapter.etcd.ssl-bundle` gets the store onto an encrypted etcd — and without the bundle the same store cannot connect, which is what says the bundle did it. |
+
+The watch-startup gap (§11.3) is the one property with no test of its own: it is a race, so a
+test would pass either way. It is closed by construction instead — the revision is read before
+the watch thread starts.
+
+### 11.6 What is deliberately not there
+
+- **No health indicator yet.** README promises that "a backend that can be unreachable
+  contributes a health indicator of its own"; `EtcdKeyValueStore.checkHealth()` is the
+  method one would be built on. See `.todo/017-etcd-health-indicator.md`.
+- **No lease reuse across `expireAt` calls.** A keepalive on the existing lease would save
+  one raft operation per session save when the TTL is unchanged; grant-and-revoke is
+  simpler and already bounds the number of live leases to one per live key.
+- **Clocks.** Deadlines are absolute milliseconds on the *adapter's* clock, so replicas
+  need their clocks roughly in step, which an etcd cluster needs anyway. Skew shows up as a
+  key expiring that much early or late, never as a lost session.

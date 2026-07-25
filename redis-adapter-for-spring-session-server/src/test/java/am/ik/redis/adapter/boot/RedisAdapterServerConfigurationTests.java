@@ -145,7 +145,7 @@ class RedisAdapterServerConfigurationTests {
 			.run(context -> assertThat(context).hasFailed()
 				.getFailure()
 				.rootCause()
-				.hasMessage("No backend answers to redis-adapter.backend=nowhere; this server has [in-memory]"));
+				.hasMessage("No backend answers to redis-adapter.backend=nowhere; this server has [etcd, in-memory]"));
 	}
 
 	/**

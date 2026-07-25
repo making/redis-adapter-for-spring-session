@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import am.ik.redis.adapter.etcd.EtcdKeyValueStore;
 import am.ik.redis.adapter.inmemory.InMemoryKeyValueStore;
 import am.ik.redis.adapter.server.RedisAdapterServer;
 import org.junit.jupiter.api.Test;
@@ -123,6 +124,38 @@ class ReadmeConfigurationExamplesTests {
 				});
 				assertThat(context.getBean(InMemoryBackendProperties.class).sweepInterval())
 					.isEqualTo(Duration.ofSeconds(5));
+				// A list from one variable, which is the shape a container platform can
+				// hand over and the one an operator is most likely to get wrong.
+				assertThat(context.getBean(EtcdBackendProperties.class).endpoints())
+					.containsExactly("http://etcd-0:2379", "http://etcd-1:2379");
+			});
+	}
+
+	/**
+	 * The etcd example, bound rather than connected to: it names a cluster that is not
+	 * there, and it must still be the etcd backend that the server would go looking for
+	 * it with. What that backend then does against a real etcd is
+	 * {@link EtcdBackendEndToEndTests}.
+	 */
+	@Test
+	void theEtcdExampleSelectsTheEtcdBackendAndPointsItAtTheCluster() {
+		Map<String, String> settings = settings(SERVER, "server-etcd");
+
+		new ApplicationContextRunner().withUserConfiguration(KeyValueStoreConfiguration.class)
+			.withPropertyValues(settings.entrySet()
+				.stream()
+				.map(entry -> entry.getKey() + "=" + entry.getValue())
+				.toArray(String[]::new))
+			.run(context -> {
+				assertThat(context.getBean(RedisAdapterProperties.class).backend())
+					.isEqualTo(RedisAdapterProperties.ETCD_BACKEND);
+				assertThat(context.getBean(EtcdBackendProperties.class)).satisfies(etcd -> {
+					assertThat(etcd.endpoints()).containsExactly("http://etcd-0:2379", "http://etcd-1:2379",
+							"http://etcd-2:2379");
+					assertThat(etcd.keyPrefix(0)).isEqualTo("/redis-adapter/0/");
+				});
+				assertThat(context.getBean(KeyValueStores.class).databases()).hasSize(1)
+					.allSatisfy(store -> assertThat(store).isInstanceOf(EtcdKeyValueStore.class));
 			});
 	}
 

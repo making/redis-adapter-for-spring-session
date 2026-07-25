@@ -14,6 +14,7 @@
 	<modules>
 		<module>redis-adapter-for-spring-session-core</module>
 		<module>redis-adapter-for-spring-session-inmemory</module>
+		<module>redis-adapter-for-spring-session-etcd</module>
 		<module>redis-adapter-for-spring-session-server</module>
 	</modules>
 

@@ -7,6 +7,7 @@ import am.ik.redis.adapter.store.KeyValueStore;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.ssl.SslBundles;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -14,11 +15,12 @@ import org.springframework.context.annotation.Configuration;
  * Declares the backend the server stores session data in, one store per database.
  *
  * <p>
- * The default is the bundled in-memory reference backend, which is single-node by nature
- * and therefore suits development, single-instance and test deployments. The rest of the
- * server only ever sees the {@link KeyValueStore} SPI, so another backend slots in by
- * contributing its own {@link KeyValueStoreFactory} bean under its own name — nothing
- * here has to know that the other backend exists.
+ * Two are bundled. The default is the in-memory reference backend, which is single-node
+ * by nature and therefore suits development, single-instance and test deployments; the
+ * other is etcd, which several adapters can share and which is what a horizontally scaled
+ * deployment needs. The rest of the server only ever sees the {@link KeyValueStore} SPI,
+ * so a third backend slots in by contributing its own {@link KeyValueStoreFactory} bean
+ * under its own name — nothing here has to know that the other backend exists.
  *
  * <p>
  * Which of the registered backends is used is decided when the application starts, by
@@ -28,7 +30,8 @@ import org.springframework.context.annotation.Configuration;
  * built, and an operator's setting would otherwise be quietly ignored.
  */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({ RedisAdapterProperties.class, InMemoryBackendProperties.class })
+@EnableConfigurationProperties({ RedisAdapterProperties.class, InMemoryBackendProperties.class,
+		EtcdBackendProperties.class })
 public class KeyValueStoreConfiguration {
 
 	/**
@@ -40,6 +43,21 @@ public class KeyValueStoreConfiguration {
 	@Bean
 	public InMemoryKeyValueStoreFactory inMemoryKeyValueStoreFactory(InMemoryBackendProperties properties) {
 		return new InMemoryKeyValueStoreFactory(properties);
+	}
+
+	/**
+	 * Registers the etcd backend, the one several adapters can share. Like the in-memory
+	 * one it is registered whether or not it is selected, and connects to nothing until
+	 * it is asked for a store.
+	 * @param properties where etcd is and how to talk to it
+	 * @param sslBundles the bundles a TLS-protected etcd is reached with, which need not
+	 * exist when no bundle is named
+	 * @return the factory of the etcd backend
+	 */
+	@Bean
+	public EtcdKeyValueStoreFactory etcdKeyValueStoreFactory(EtcdBackendProperties properties,
+			ObjectProvider<SslBundles> sslBundles) {
+		return new EtcdKeyValueStoreFactory(properties, sslBundles);
 	}
 
 	/**

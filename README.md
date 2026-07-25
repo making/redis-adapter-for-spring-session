@@ -19,8 +19,8 @@ and configures everything with properties. Only the connection target changes.
                                              KeyValueStore  |  (one SPI)
                                                             v
                                               +---------------------------+
-                                              | in-memory backend, or a   |
-                                              | backend you write         |
+                                              | in-memory backend, etcd,  |
+                                              | or a backend you write    |
                                               +---------------------------+
 ```
 
@@ -31,6 +31,7 @@ and configures everything with properties. Only the connection target changes.
 - [Quick start](#quick-start)
 - [Using it from an application](#using-it-from-an-application)
 - [Running the server](#running-the-server)
+- [Backends](#backends)
 - [What is implemented](#what-is-implemented)
 - [Writing a backend](#writing-a-backend)
 - [Limitations and non-goals](#limitations-and-non-goals)
@@ -54,11 +55,11 @@ Do not use it when:
 
 Two things are worth knowing before you start:
 
-- **The bundled backend is in-memory.** It keeps the sessions in the adapter process, so they are
+- **The default backend is in-memory.** It keeps the sessions in the adapter process, so they are
   gone when it restarts and are not shared with a second adapter. That is the development and
   single-instance backend, and it is what makes the server runnable with no configuration at all.
-  Running several adapters in front of the same sessions needs a backend that is itself shared —
-  see [Writing a backend](#writing-a-backend).
+  Running several adapters in front of the same sessions needs a backend that is itself shared:
+  [etcd](#etcd) is bundled, and anything else is a module you write.
 - **The adapter itself holds no session state.** Everything it is asked to remember goes to the
   backend, so replicas scale as far as the backend does.
 
@@ -157,8 +158,9 @@ public class SessionEventListener {
 ```
 
 `SessionExpiredEvent` arrives because the backend reports the key it dropped, not because anything
-polled for it. The bundled backend sweeps for expired keys once a second by default, so an event
-follows an expiry within about that long.
+polled for it. How long that takes is the backend's business: the in-memory one sweeps once a second
+by default, and etcd removes the key when its lease runs out, so either way the event follows the
+expiry within about a second.
 
 Sessions can be looked up by the user they belong to:
 
@@ -279,8 +281,16 @@ Every setting is an ordinary Spring Boot property, so a command line argument, a
 | `redis-adapter.ssl.enabled` | unset | Whether to serve TLS. Unset means TLS exactly when a bundle is named; `false` keeps a configured bundle unused. |
 | `redis-adapter.ssl.bundle` | none | The `spring.ssl.bundle.*` holding the server's certificate and key. |
 | `redis-adapter.ssl.client-auth` | `none` | Whether clients must present a certificate of their own: `none`, `want` or `need`. |
-| `redis-adapter.in-memory.sweeper-enabled` | `true` | Whether the bundled backend sweeps for keys whose time has passed but which nobody has touched. |
+| `redis-adapter.in-memory.sweeper-enabled` | `true` | Whether the in-memory backend sweeps for keys whose time has passed but which nobody has touched. |
 | `redis-adapter.in-memory.sweep-interval` | `1s` | How long between sweeps, which is the longest an expired key can sit there unnoticed. |
+| `redis-adapter.etcd.endpoints` | `http://localhost:2379` | The etcd cluster's client URLs. Requests go to the one that last worked and move on when a member cannot be reached. |
+| `redis-adapter.etcd.key-prefix` | `/redis-adapter/` | Where in etcd's keyspace the sessions live. Each database gets `<key-prefix><database>/` of its own. |
+| `redis-adapter.etcd.connect-timeout` | `5s` | How long to wait for a connection to an endpoint. |
+| `redis-adapter.etcd.request-timeout` | `5s` | How long to wait for etcd to answer, which bounds how long a Redis command can hang. |
+| `redis-adapter.etcd.watch-retry-delay` | `1s` | How long before the watch that delivers session events is opened again after it fails. |
+| `redis-adapter.etcd.username` | none | The etcd user, for a cluster with authentication enabled. |
+| `redis-adapter.etcd.password` | none | That user's password. |
+| `redis-adapter.etcd.ssl-bundle` | none | The `spring.ssl.bundle.*` to reach an `https://` etcd with, and the client certificate for mutual TLS. |
 
 Written as properties, the settings an operator is most likely to change look like this:
 
@@ -293,11 +303,7 @@ redis-adapter.backend=in-memory
 redis-adapter.password=s3cret
 ```
 
-<!-- snippet:server-in-memory -->
-```properties
-redis-adapter.in-memory.sweeper-enabled=true
-redis-adapter.in-memory.sweep-interval=1s
-```
+What the backend itself is given is under [Backends](#backends).
 
 The same settings as environment variables, which is how a container platform usually hands them
 over:
@@ -308,6 +314,7 @@ REDIS_ADAPTER_PORT=16379
 REDIS_ADAPTER_PASSWORD=s3cret
 REDIS_ADAPTER_DATABASES=16
 REDIS_ADAPTER_IN_MEMORY_SWEEP_INTERVAL=5s
+REDIS_ADAPTER_ETCD_ENDPOINTS=http://etcd-0:2379,http://etcd-1:2379
 ```
 
 ### TLS
@@ -350,10 +357,64 @@ port carries nothing but the actuator; sessions are served over RESP on `redis-a
 ### Running more than one
 
 The adapter keeps no session state, so replicas behind a load balancer serve the same sessions —
-but only as far as the backend does. The bundled in-memory backend does not, since each replica
-owns its own map. Scaling out means a backend that is shared, and one that can tell a replica about
-a key another replica expired, because that is what an application's `SessionExpiredEvent` is made
-of.
+but only as far as the backend does. The in-memory backend does not, since each replica owns its
+own map. Scaling out means a backend that is shared, and one that can tell a replica about a key
+another replica expired, because that is what an application's `SessionExpiredEvent` is made of.
+[etcd](#etcd) does both.
+
+## Backends
+
+Which backend holds the sessions is one property, `redis-adapter.backend`, matched against the name
+each backend answers to. Two are bundled, and nothing about the application changes when the answer
+changes.
+
+### In-memory
+
+The default, and what the server runs with no configuration at all. Each adapter owns its own map,
+so the sessions are gone when it restarts and a second adapter serves different ones. Keys nobody
+comes back to are removed by a sweeper.
+
+<!-- snippet:server-in-memory -->
+```properties
+redis-adapter.in-memory.sweeper-enabled=true
+redis-adapter.in-memory.sweep-interval=1s
+```
+
+### etcd
+
+Sessions live in an [etcd](https://etcd.io) cluster, so they are shared by every adapter pointed at
+it and outlive all of them. This is the backend for running more than one adapter.
+
+<!-- snippet:server-etcd -->
+```properties
+redis-adapter.backend=etcd
+redis-adapter.etcd.endpoints=http://etcd-0:2379,http://etcd-1:2379,http://etcd-2:2379
+redis-adapter.etcd.key-prefix=/redis-adapter/
+```
+
+Three things are worth knowing:
+
+- **Expiry is etcd's own.** A key with a TTL is attached to an etcd lease, so a session nobody
+  comes back to is removed by etcd rather than by anything the adapter polls for. Leases are whole
+  seconds and are rounded up, so a key is collected shortly *after* it is due; it is already gone
+  as far as every read is concerned, because the exact deadline travels with the value.
+- **Events cross the adapters.** Every adapter watches its keyspace, so a session that expires or
+  is deleted anywhere is announced to the clients subscribed everywhere. An application connected
+  to one adapter therefore hears about a session another adapter removed, which is what
+  `SessionExpiredEvent` needs and what the in-memory backend cannot do.
+- **The keyspace is yours to choose.** `key-prefix` is where the sessions live, and each database
+  gets a keyspace of its own underneath it. Two deployments can share a cluster by taking different
+  prefixes; a cluster used for other things is untouched outside them.
+
+It reaches etcd over the HTTP gateway etcd serves on its client port (`--enable-grpc-gateway`, on
+by default), which is why no gRPC stack, protobuf or Netty is added to the server. Authentication
+is `redis-adapter.etcd.username` / `password`, and an `https://` endpoint is reached through an SSL
+bundle named by `redis-adapter.etcd.ssl-bundle` — the same bundles the adapter's own port uses,
+including a client certificate for mutual TLS.
+
+etcd keeps every value in memory and replicates it to every member, and it is not built for large
+values: keep session attributes small, and mind that a cluster has a total size limit
+(`--quota-backend-bytes`, 2 GiB by default).
 
 ## What is implemented
 
@@ -467,6 +528,8 @@ hold no resource and open no connection until `create` is called.
 
 `am.ik.redis.adapter.inmemory.InMemoryKeyValueStore` is the reference implementation, and it
 depends on the core exactly as an external backend does.
+`am.ik.redis.adapter.etcd.EtcdKeyValueStore` is the worked example of the harder half: how a shared
+backend keeps read-modify-write atomic across replicas, and how it carries key events between them.
 
 ## Limitations and non-goals
 
@@ -475,8 +538,10 @@ depends on the core exactly as an external backend does.
 - Redis Cluster, Sentinel, replication and persistence are not implemented, and neither is any
   command Spring Session does not use.
 - Only as much of RESP3 as Lettuce needs to complete its handshake and run the session commands.
-- The bundled backend is single-node and in-memory: sessions do not survive a restart and are not
-  shared between adapter replicas.
+- The default backend is single-node and in-memory: sessions do not survive a restart and are not
+  shared between adapter replicas. Sharing them means [etcd](#etcd) or a backend of your own.
+- The etcd backend inherits etcd's shape: values are kept in memory and replicated to every member,
+  so it suits sessions rather than large payloads, and a cluster has a total size limit.
 
 ## Building from source
 
@@ -486,12 +551,16 @@ Java 25 or later.
 ./mvnw clean spring-javaformat:apply test
 ```
 
-The build has three modules:
+The etcd backend's tests start a real etcd in a container, so a Docker (or compatible) daemon has to
+be running for the full build.
+
+The build has four modules:
 
 | Module | What it is |
 | --- | --- |
 | `redis-adapter-for-spring-session-core` | The `KeyValueStore` SPI and the protocol, command, pub/sub and server layers. Depends on `slf4j-api` and `jspecify` and nothing else, and contains no backend. |
 | `redis-adapter-for-spring-session-inmemory` | The bundled in-memory backend. Depends on the core only, exactly as an external backend would. |
+| `redis-adapter-for-spring-session-etcd` | The etcd backend. Also depends on the core only: it talks to etcd's HTTP gateway with the JDK's own client, so no gRPC stack is added to the server. Its tests run against a real etcd in a container. |
 | `redis-adapter-for-spring-session-server` | The Spring Boot server, and the end-to-end tests that drive it through a real Lettuce client running stock Spring Session. |
 
 Every example in this README is taken from a source file that the server module's tests compile and

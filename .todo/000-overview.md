@@ -50,6 +50,19 @@ research; if you need them again, unzip
   design for this.
 - **011** (docs/README) comes last, after 007–010 and 014, so documented behaviour (incl.
   TLS and however the server is shipped) is proven.
+- **016** (etcd backend) came after 011 and needed only the SPI and the backend-selection
+  seam 008 introduced. It is the first backend that is *shared*, which is what turns §7 of
+  the architecture (horizontal scaling) from a design note into something that works, and
+  the first that can be *unreachable* — which is what 017 is for. It had no todo file of its
+  own: it was asked for and built in one session, so there is nothing to recover and no
+  history row.
+- **017** (backend health indicator) closes the gap 016 opened: `README.md` promises that a
+  backend which can be unreachable contributes a health indicator, and none does yet.
+- **018** (etcd performance) closes the other one: 016's correctness is proved against a real
+  etcd and its cost is not measured at all. It blocks nothing, but it decides whether the two
+  optimizations §11.6 of the architecture lists are worth their complexity, and it is what
+  turns README's qualitative advice about session size into something an operator can plan
+  with.
 
 ## Definition of done (every task)
 
@@ -81,3 +94,6 @@ research; if you need them again, unzip
 | 014 | GraalVM native image and container image | not started |
 | 011 | README, docs & tested examples | done (native image / container left to 014) |
 | 015 | Reload the server certificate without a restart (optional) | done |
+| 016 | etcd backend (shared, so several adapters serve the same sessions) | done |
+| 017 | Health indicator for a backend that can be unreachable | not started |
+| 018 | Measure what the etcd backend costs | not started |
