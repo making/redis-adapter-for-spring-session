@@ -51,19 +51,28 @@ Why a network server rather than an in-process `RedisConnectionFactory`:
 
 ### How the application connects (target end state)
 
+> Revised (2026-07-25, task 011): a Spring Boot application needs **no configuration class
+> and no annotation at all**. `spring-boot-starter-session-data-redis` brings Boot's own
+> session auto-configuration, and the mode is a property. The annotations below still work
+> and remain covered by the end-to-end suite, but the documented setup is the properties
+> one, and `README.md` shows that.
+
+```properties
+spring.data.redis.host=<adapter-host>
+spring.data.redis.port=6379
+spring.session.data.redis.repository-type=indexed   # omit for simple mode
+```
+Equivalently, without Boot's auto-configuration:
 ```java
 @Configuration
 @EnableRedisHttpSession                // or @EnableRedisIndexedHttpSession
 class SessionConfig { }
 ```
-```properties
-spring.data.redis.host=<adapter-host>
-spring.data.redis.port=6379
-```
-The app needs nothing from this project. For `@EnableRedisIndexedHttpSession` the default
+The app needs nothing from this project. In indexed mode the default
 `ConfigureNotifyKeyspaceEventsAction` will issue `CONFIG GET/SET notify-keyspace-events`
-at startup; our server answers those (so the app does **not** need to declare
-`ConfigureRedisAction.NO_OP`, though it may).
+at startup; our server answers those (so the app does **not** need
+`spring.session.data.redis.configure-action=none`, nor a `ConfigureRedisAction.NO_OP`
+bean, though it may have them).
 
 ## 3. Layered design (core module)
 

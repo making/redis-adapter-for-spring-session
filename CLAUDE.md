@@ -19,7 +19,26 @@ repository.
 
 ## Implemented Features
 
-TBD
+`README.md` is the user-facing description; this is only what a change to the code has to keep true.
+
+- RESP2/RESP3 server on virtual threads (one per connection), plus the command set Spring Session
+  needs in both simple and indexed mode, pub/sub, and `__keyevent@<db>__:del` / `:expired`
+  notifications. `.docs/design/redis-command-surface.md` is the exact contract.
+- `AUTH` (per connection, checked in `CommandDispatcher` by how a command is registered) and TLS
+  from a Spring Boot `SslBundle`, including certificate rotation without a restart.
+- The Spring Boot server module: `redis-adapter.*` properties, lifecycle, actuator health and
+  metrics, and backend selection by name at startup.
+
+Two rules constrain anything added here:
+
+- **A property an operator sets at deploy time must never decide which beans exist.** Spring
+  evaluates `@Conditional` while an ahead-of-time image is built, so the decision has to be made
+  inside the bean, from the property (`KeyValueStoreConfiguration`, `RedisAdapterServerConfiguration`).
+- **Every example in `README.md` is quoted from a file that is compiled and run.** The examples live
+  under `src/test/java/com/example` and `src/test/resources/readme` in the server module, marked with
+  `tag::name[]`; the README marks the same name with `<!-- snippet:name -->`. `ReadmeExamplesTests`
+  fails if the two drift apart, and it also holds the README's property, command and SPI tables to
+  what the code declares. Change the example, not the README.
 
 ## Development Requirements
 

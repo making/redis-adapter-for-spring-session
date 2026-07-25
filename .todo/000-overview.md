@@ -79,5 +79,5 @@ research; if you need them again, unzip
 | 009 | ZSet commands for SortedSetRedisSessionExpirationStore (optional) | done |
 | 010 | TLS via Spring Boot SslBundle | done |
 | 014 | GraalVM native image and container image | not started |
-| 011 | README, docs & tested examples | not started |
+| 011 | README, docs & tested examples | done (native image / container left to 014) |
 | 015 | Reload the server certificate without a restart (optional) | done |

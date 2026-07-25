@@ -57,6 +57,13 @@ can still configure everything through environment variables in either image.
    (keyspace notifications, virtual threads, the sweeper), and the one where a missing hint
    would show up as silence rather than as an error.
 
+7. **Document it in the README**, which now exists: 011 shipped without a container or native
+   section, deliberately, since nothing was published yet. Add one under "Running the server"
+   with the image names, the `docker run` invocation and the recorded sizes and startup times.
+   Every `java`/`properties` block in the README has to be quoted from a file the server module's
+   tests run (`<!-- snippet:name -->` against `tag::name[]`); `ReadmeExamplesTests` fails
+   otherwise. A `bash` block is prose and needs none of that.
+
 ## Acceptance criteria
 - The native binary starts and answers both RESP and `/actuator/health`.
 - `redis-adapter.*` set through environment variables changes the native binary's

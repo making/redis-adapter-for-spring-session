@@ -51,16 +51,13 @@
 			<scope>test</scope>
 		</dependency>
 		<!-- End-to-end compatibility tests drive this server through a real Lettuce client
-		     running stock Spring Session, so both are test-scoped here and never reach the
-		     server's runtime classpath. -->
+		     running stock Spring Session, so it is test-scoped here and never reaches the
+		     server's runtime classpath. The starter rather than the libraries alone, because
+		     an application adds exactly this and is then configured by properties: the
+		     documented setup is only proven if the tests boot the same auto-configuration. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-data-redis</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.session</groupId>
-			<artifactId>spring-session-data-redis</artifactId>
+			<artifactId>spring-boot-starter-session-data-redis</artifactId>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

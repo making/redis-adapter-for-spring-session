@@ -10,6 +10,7 @@ import am.ik.redis.adapter.store.ByteArrayKey;
 import am.ik.redis.adapter.store.KeyValueStore;
 import am.ik.redis.adapter.store.RedisValue;
 import am.ik.redis.adapter.store.ZSetValue;
+import com.example.session.SortedSetExpirationConfig;
 import org.junit.jupiter.api.Test;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -200,7 +201,7 @@ class SortedSetExpirationEndToEndTests {
 
 	@EnableAutoConfiguration
 	@EnableRedisIndexedHttpSession(cleanupCron = Scheduled.CRON_DISABLED)
-	@Import({ AdapterServerTestConfiguration.class, SortedSetExpirationStoreConfiguration.class })
+	@Import({ AdapterServerTestConfiguration.class, SortedSetExpirationConfig.class })
 	static class SessionApplication {
 
 		@Bean
