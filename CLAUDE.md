@@ -18,6 +18,27 @@ written up. The `-am` is not optional: the harness lives in the server module an
 backends, so without it a change to a backend module is measured as the last *installed* jar of
 it and the report is quietly a run of the old code.
 
+```bash
+./mvnw install -DskipTests                              # Publish the adapter jar locally
+cd examples/session-example-etcd
+./mvnw test                                             # End-to-end, over the adapter
+./mvnw test -Dspring.profiles.active=redis              # The same tests, over a real Redis
+./mvnw spring-boot:test-run                             # The example, on :8080, with its containers
+```
+
+Each directory under `examples/` is a project of its own rather than a module, so the reactor
+never builds one: it depends on the adapter's installed jar the way any application would. That is
+also why the `install` is not optional — without it the tests run against whatever was last
+installed, the same trap the `-am` above guards. They drive a browser (Playwright) against two
+instances of the example, and a **Spring** profile decides only where the sessions go: the
+adapter's container by default, a Redis one under `redis`. The switch is a `@Profile` on the
+container beans in `TestcontainersConfiguration`, which is also what `spring-boot:test-run` uses,
+so there is one wiring and not two. Redis is the oracle, so a disagreement between the two runs is
+the adapter's fault. Docker is required, and the example's own build is the one that runs them — a
+change to the adapter is not covered by the reactor's tests alone.
+
+An example is named `session-example-<backend>`, so a second backend sorts next to the first.
+
 ## Design Requirements
 - **Package**: `am.ik.redis.adapter` - Main package (core module); the in-memory backend module uses `am.ik.redis.adapter.inmemory`, the etcd backend module `am.ik.redis.adapter.etcd`, and the Spring Boot server module `am.ik.redis.adapter.boot`. A package is never split across two modules.
 - **Modules**:

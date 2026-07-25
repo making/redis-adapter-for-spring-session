@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.1.0</version>
+		<relativePath/> <!-- lookup parent from repository -->
+	</parent>
+	<groupId>com.example</groupId>
+	<artifactId>session-example-etcd</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<name>session-example-etcd</name>
+	<description>Spring Session over the Redis Adapter backed by etcd</description>
+
+	<properties>
+		<java.version>25</java.version>
+		<!-- The adapter this example runs against. Only the tests use it, and only as a jar
+		     to start in a container: nothing from that project is on this application's class
+		     path. Point it at a released version and nothing else here moves. -->
+		<redis-adapter.version>0.1.0-SNAPSHOT</redis-adapter.version>
+		<playwright.version>1.61.0</playwright.version>
+		<nullability-maven-plugin.version>0.4.2</nullability-maven-plugin.version>
+	</properties>
+
+	<dependencies>
+		<!-- The whole of the integration. Spring Boot configures Spring Session from this
+		     starter alone; where the sessions actually end up is decided by the host and port
+		     it is pointed at. -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-session-data-redis</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-thymeleaf</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-session-data-redis-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-thymeleaf-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-webmvc-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-testcontainers</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- The end-to-end test drives a real browser against the running application, so
+		     what it proves is a session as a user has one: a cookie, and a page that
+		     remembers. -->
+		<dependency>
+			<groupId>com.microsoft.playwright</groupId>
+			<artifactId>playwright</artifactId>
+			<version>${playwright.version}</version>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.springframework.boot</groupId>
+				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>io.spring.javaformat</groupId>
+				<artifactId>spring-javaformat-maven-plugin</artifactId>
+				<version>0.0.47</version>
+			</plugin>
+			<!-- JSpecify plus NullAway, as everything else in this repository is built. -->
+			<plugin>
+				<groupId>am.ik.maven</groupId>
+				<artifactId>nullability-maven-plugin</artifactId>
+				<version>${nullability-maven-plugin.version}</version>
+				<extensions>true</extensions>
+				<executions>
+					<execution>
+						<goals>
+							<goal>configure</goal>
+							<goal>generate-package-info</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<!-- The tests start the adapter from its runnable jar, in a container. Resolving
+			     that jar as an artifact rather than reaching into a sibling module's target
+			     directory is what keeps this example an ordinary consumer of a published
+			     version. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-dependency-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>copy-redis-adapter-server</id>
+						<phase>process-test-resources</phase>
+						<goals>
+							<goal>copy</goal>
+						</goals>
+						<configuration>
+							<artifactItems>
+								<artifactItem>
+									<groupId>am.ik.redis</groupId>
+									<artifactId>redis-adapter-for-spring-session-server</artifactId>
+									<version>${redis-adapter.version}</version>
+									<classifier>exec</classifier>
+									<type>jar</type>
+									<destFileName>redis-adapter-server.jar</destFileName>
+								</artifactItem>
+							</artifactItems>
+							<outputDirectory>${project.build.directory}/adapter</outputDirectory>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

@@ -34,6 +34,7 @@ and configures everything with properties. Only the connection target changes.
 - [Backends](#backends)
 - [What is implemented](#what-is-implemented)
 - [Writing a backend](#writing-a-backend)
+- [Example applications](#example-applications)
 - [Limitations and non-goals](#limitations-and-non-goals)
 - [Building from source](#building-from-source)
 - [Design documents](#design-documents)
@@ -561,6 +562,26 @@ hold no resource and open no connection until `create` is called.
 depends on the core exactly as an external backend does.
 `am.ik.redis.adapter.etcd.EtcdKeyValueStore` is the worked example of the harder half: how a shared
 backend keeps read-modify-write atomic across replicas, and how it carries key events between them.
+
+## Example applications
+
+[`examples/session-example-etcd`](examples/session-example-etcd) is a Spring Boot application that
+keeps its sessions in etcd through the adapter, generated from start.spring.io and left as ordinary
+as possible: the session starter on the class path, a host and a port in `application.properties`,
+and one screen that remembers who you are.
+
+```bash
+./mvnw install -DskipTests   # publish the adapter jar to the local repository
+cd examples/session-example-etcd
+./mvnw spring-boot:test-run  # starts etcd, an adapter, and the application on :8080
+```
+
+Its end-to-end tests drive a browser against two instances of the application, and a Spring profile
+decides only where the sessions go: `./mvnw test` runs them against two adapters sharing one etcd,
+and `./mvnw test -Dspring.profiles.active=redis` runs the same assertions against a real Redis.
+Redis is the oracle, so the two runs are expected to agree — including that a session created
+against one instance is served by the other.
+See [its README](examples/session-example-etcd/README.md).
 
 ## Limitations and non-goals
 

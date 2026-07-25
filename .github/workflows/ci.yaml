@@ -32,6 +32,31 @@ jobs:
         cache: maven
     - name: Unit Tests
       run: ./mvnw -V --no-transfer-progress clean test
+  # An example is a project of its own rather than a module, so the build above never
+  # touches it. They are built here because an example nothing runs is an example that
+  # rots: each drives a browser against two applications, over the adapter and then over
+  # a real Redis, and the two runs have to agree.
+  examples:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        example: [session-example-etcd]
+    steps:
+    - uses: actions/checkout@v7
+    - name: Set up JDK 25
+      uses: actions/setup-java@v5
+      with:
+        java-version: '25'
+        distribution: 'liberica'
+        cache: maven
+    - name: Install the adapter
+      run: ./mvnw -V --no-transfer-progress install -DskipTests
+    - name: End-to-End Tests
+      working-directory: examples/${{ matrix.example }}
+      run: ./mvnw -V --no-transfer-progress test
+    - name: End-to-End Tests against Redis
+      working-directory: examples/${{ matrix.example }}
+      run: ./mvnw -V --no-transfer-progress test -Dspring.profiles.active=redis
   deploy:
     needs: test
     if: github.event_name != 'pull_request'
