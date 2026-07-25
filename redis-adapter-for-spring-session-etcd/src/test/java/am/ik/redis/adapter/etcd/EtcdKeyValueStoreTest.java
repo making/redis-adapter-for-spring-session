@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -454,6 +455,101 @@ class EtcdKeyValueStoreTest {
 		}
 
 		assertThat(asSet(this.store.get(b("contended"))).members()).hasSize(writers * perWriter);
+	}
+
+	/**
+	 * The contended key a real deployment has: every session expiring in the same minute
+	 * adds itself to that minute's set, from as many callers as the adapters sharing the
+	 * cluster have connections between them. Compare-and-swap alone does not survive this
+	 * — the work per successful write grows with the number of writers, so past some
+	 * concurrency the retries stop keeping up and a share of the writes is lost — which
+	 * is why the mutations of one key are applied a batch at a time instead.
+	 */
+	@Test
+	void everyWriteLandsWhenHundredsOfCallersShareOneKey() {
+		int writers = 256;
+		int perWriter = 5;
+		List<Throwable> failures = new CopyOnWriteArrayList<>();
+		try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+			for (int writer = 0; writer < writers; writer++) {
+				int id = writer;
+				pool.submit(() -> {
+					for (int i = 0; i < perWriter; i++) {
+						try {
+							this.store.sadd(b("expirations"), List.of(b("m-" + id + "-" + i)));
+						}
+						catch (RuntimeException e) {
+							failures.add(e);
+						}
+					}
+				});
+			}
+		}
+
+		assertThat(failures).isEmpty();
+		assertThat(asSet(this.store.get(b("expirations"))).members()).hasSize(writers * perWriter);
+	}
+
+	/**
+	 * Spring Session sets the bucket's deadline on every save, right after adding to it,
+	 * so a deadline and a batch of additions are the ordinary contended pair. Neither may
+	 * lose to the other.
+	 */
+	@Test
+	void aDeadlineSetWhileTheSameKeyIsBeingWrittenLands() {
+		int writers = 64;
+		long deadline = this.store.currentTimeMillis() + Duration.ofMinutes(30).toMillis();
+		this.store.sadd(b("expirations"), List.of(b("first")));
+		List<Throwable> failures = new CopyOnWriteArrayList<>();
+		try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+			for (int writer = 0; writer < writers; writer++) {
+				int id = writer;
+				pool.submit(() -> {
+					try {
+						this.store.sadd(b("expirations"), List.of(b("m-" + id)));
+						this.store.expireAt(b("expirations"), deadline);
+					}
+					catch (RuntimeException e) {
+						failures.add(e);
+					}
+				});
+			}
+		}
+
+		assertThat(failures).isEmpty();
+		assertThat(asSet(this.store.get(b("expirations"))).members()).hasSize(writers + 1);
+		assertThat(this.store.getExpireAt(b("expirations"))).isEqualTo(deadline);
+	}
+
+	/**
+	 * A mutation that refuses the value fails the caller that asked for it and nobody
+	 * else: a batch is a convenience of this backend's, not something an application can
+	 * be made to notice.
+	 */
+	@Test
+	void aMutationThatRefusesTheValueFailsOnlyItsOwnCaller() {
+		int writers = 64;
+		this.store.sadd(b("s"), List.of(b("first")));
+		List<Throwable> failures = new CopyOnWriteArrayList<>();
+		try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+			for (int writer = 0; writer < writers; writer++) {
+				int id = writer;
+				pool.submit(() -> {
+					this.store.sadd(b("s"), List.of(b("m-" + id)));
+					try {
+						this.store.append(b("s"), b("not a string"));
+					}
+					catch (RuntimeException e) {
+						failures.add(e);
+					}
+				});
+			}
+		}
+
+		assertThat(failures).hasSize(writers)
+			.allSatisfy(failure -> assertThat(failure).isInstanceOf(TypeMismatchException.class)
+				.hasMessageContaining("APPEND"));
+		assertThat(asSet(this.store.get(b("s"))).members()).hasSize(writers + 1);
 	}
 
 	@Test

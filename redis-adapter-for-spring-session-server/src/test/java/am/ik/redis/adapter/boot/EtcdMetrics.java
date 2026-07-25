@@ -163,8 +163,18 @@ record EtcdMetrics(Map<String, Double> samples) {
 		return sample.substring(from, sample.indexOf('"', from));
 	}
 
+	/**
+	 * Formats a call count, keeping enough digits for it to still say something below
+	 * one. A batched write costs a small fraction of a call, and "0.0 calls/op" would
+	 * report that as none at all.
+	 * @param value the count
+	 * @return the count as text
+	 */
 	private static String rounded(double value) {
-		return value == Math.rint(value) ? "%.0f".formatted(value) : "%.1f".formatted(value);
+		if (value == Math.rint(value)) {
+			return "%.0f".formatted(value);
+		}
+		return (Math.abs(value) < 1) ? "%.3f".formatted(value) : "%.1f".formatted(value);
 	}
 
 }

@@ -81,6 +81,13 @@ import org.slf4j.LoggerFactory;
  * exception is {@link #rename}, which the SPI already allows to be non-atomic across its
  * two keys.
  *
+ * <p>
+ * Inside one adapter a key is touched by one caller at a time, and the mutations that
+ * pile up behind that caller are applied together in a single transaction — see
+ * {@link KeyQueues} for why. Compare-and-swap is therefore left to settle the conflicts
+ * between replicas, which are the rare ones, rather than the conflicts an adapter has
+ * with itself, which are not.
+ *
  * <h2>Clocks</h2> Deadlines are absolute milliseconds on the <em>adapter's</em> clock, so
  * replicas need their clocks roughly in step — which an etcd cluster needs anyway. Skew
  * shows up as a key expiring that much early or late, never as a lost session.
@@ -115,6 +122,9 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 	private final Duration watchRetryDelay;
 
 	private final CopyOnWriteArrayList<KeyEventListener> listeners = new CopyOnWriteArrayList<>();
+
+	/** What keeps this adapter's own callers from competing for the same key. */
+	private final KeyQueues queues = new KeyQueues(this::applyBatch);
 
 	private volatile boolean closed;
 
@@ -343,21 +353,36 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 
 	@Override
 	public boolean delete(byte[] key) {
-		Kv previous = this.client.deleteAndReturnPrevious(etcdKey(key));
-		if (previous == null) {
-			return false;
-		}
-		// The lease the key was on now holds nothing, and a lease outlives the key it was
-		// granted for by as much as its remaining TTL.
-		this.client.revokeLeaseQuietly(previous.lease());
-		Envelope envelope = Envelope.decode(previous.value());
-		// Whether this was a delete or a lazy expiry is decided from the same value the
-		// watch decides it from, so the answer to the caller and the notification agree.
-		return envelope.removalEvent(currentTimeMillis()) == Envelope.Removal.DELETED;
+		return this.queues.exclusively(key, () -> {
+			Kv previous = this.client.deleteAndReturnPrevious(etcdKey(key));
+			if (previous == null) {
+				return false;
+			}
+			// The lease the key was on now holds nothing, and a lease outlives the key it
+			// was granted for by as much as its remaining TTL.
+			this.client.revokeLeaseQuietly(previous.lease());
+			Envelope envelope = Envelope.decode(previous.value());
+			// Whether this was a delete or a lazy expiry is decided from the same value
+			// the watch decides it from, so the answer to the caller and the notification
+			// agree.
+			return envelope.removalEvent(currentTimeMillis()) == Envelope.Removal.DELETED;
+		});
 	}
 
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>
+	 * The source is held for the duration, which is what its own transaction is guarded
+	 * on. The destination is not: Redis overwrites it whatever it held, so there is
+	 * nothing there for this adapter's other callers to lose.
+	 */
 	@Override
 	public boolean rename(byte[] source, byte[] destination) {
+		return this.queues.exclusively(source, () -> renameHeld(source, destination));
+	}
+
+	private boolean renameHeld(byte[] source, byte[] destination) {
 		byte[] etcdSource = etcdKey(source);
 		byte[] etcdDestination = etcdKey(destination);
 		for (int attempt = 1; attempt <= this.maxAttempts; attempt++) {
@@ -415,6 +440,10 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 
 	@Override
 	public boolean expireAt(byte[] key, long epochMilli) {
+		return this.queues.exclusively(key, () -> expireAtHeld(key, epochMilli));
+	}
+
+	private boolean expireAtHeld(byte[] key, long epochMilli) {
 		byte[] etcdKey = etcdKey(key);
 		for (int attempt = 1; attempt <= this.maxAttempts; attempt++) {
 			Live live = live(etcdKey);
@@ -439,6 +468,10 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 
 	@Override
 	public boolean persist(byte[] key) {
+		return this.queues.exclusively(key, () -> persistHeld(key));
+	}
+
+	private boolean persistHeld(byte[] key) {
 		byte[] etcdKey = etcdKey(key);
 		for (int attempt = 1; attempt <= this.maxAttempts; attempt++) {
 			Live live = live(etcdKey);
@@ -474,16 +507,9 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 	 * Applies a mutation to whatever is under a key, atomically.
 	 *
 	 * <p>
-	 * The value is read, the mutation decides what should replace it, and the write only
-	 * lands if nothing else changed the key in between; otherwise the whole thing is
-	 * tried again on the new value. That is what makes two adapter replicas adding to one
-	 * set safe, and it is the reason a mutation must be a pure function of what it is
-	 * given.
-	 *
-	 * <p>
-	 * Any deadline and lease the key already has are carried over, since none of these
-	 * operations is about expiry — {@code HSET} on a session must not extend or forget
-	 * when it dies.
+	 * The mutation is queued at the key rather than run here: whichever caller has the
+	 * key applies everything queued at it in one transaction, so callers of this adapter
+	 * do not compete for a key they could simply take turns at. See {@link KeyQueues}.
 	 * @param <T> what the operation returns
 	 * @param key the Redis key
 	 * @param mutation what to do with the current value, which is {@code null} when the
@@ -493,6 +519,31 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 	 * retries
 	 */
 	private <T> T update(byte[] key, Mutation<T> mutation) {
+		return this.queues.mutate(key, mutation);
+	}
+
+	/**
+	 * Applies a batch of mutations to one key, atomically.
+	 *
+	 * <p>
+	 * The value is read, every mutation in the batch decides in turn what should replace
+	 * it, and the write only lands if nothing else changed the key in between; otherwise
+	 * the whole batch is applied again to the new value. That is what makes two adapter
+	 * replicas adding to one set safe, and it is the reason a mutation must be a pure
+	 * function of what it is given.
+	 *
+	 * <p>
+	 * Any deadline and lease the key already has are carried over, since none of these
+	 * operations is about expiry — {@code HSET} on a session must not extend or forget
+	 * when it dies. A batch that empties the key part-way through is the exception: what
+	 * a later mutation writes is then a new key, which in Redis has neither the deadline
+	 * nor anything else the old one had.
+	 * @param key the Redis key
+	 * @param batch the mutations queued at it, oldest first
+	 * @throws EtcdException if the key changes under it more often than this store
+	 * retries
+	 */
+	private void applyBatch(byte[] key, List<KeyQueues.Pending<?>> batch) {
 		byte[] etcdKey = etcdKey(key);
 		Kv kv = this.client.get(etcdKey);
 		for (int attempt = 1; attempt <= this.maxAttempts; attempt++) {
@@ -519,16 +570,20 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 				// A tombstone is an absent key whose revision still guards the write, so
 				// what replaces it cannot overwrite a value written in the meantime.
 			}
-			Outcome<T> outcome = mutation.apply(current);
-			RedisValue write = outcome.write();
-			if (write == null && !outcome.vanish()) {
-				return outcome.result();
+			KeyQueues.Batched batched = KeyQueues.applyInOrder(batch, current);
+			if (!batched.changed()) {
+				return;
 			}
+			if (batched.vanished()) {
+				lease = EtcdClient.NO_LEASE;
+				expireAtMillis = Envelope.NO_EXPIRY;
+			}
+			RedisValue write = batched.value();
 			if (write != null) {
 				EtcdClient.Write written = this.client.putIfUnchanged(etcdKey, revision,
 						Envelope.of(write, expireAtMillis).encode(), lease);
 				if (written.written()) {
-					return outcome.result();
+					return;
 				}
 				// The transaction that refused the write read the key back, so the next
 				// attempt starts from what is there now rather than from another round
@@ -542,7 +597,7 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 					tombstoneLease);
 			if (written.written()) {
 				removeTombstone(etcdKey, written.revision(), tombstoneLease);
-				return outcome.result();
+				return;
 			}
 			this.client.revokeLeaseQuietly(tombstoneLease);
 			kv = written.current();
@@ -557,9 +612,10 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 	 *
 	 * <p>
 	 * Retrying immediately is what turns contention into a livelock: two writers that
-	 * lose to each other come back at the same moment and lose again. Spring Session has
-	 * one genuinely contended key — every session expiring in the same minute adds itself
-	 * to that minute's set — so this is the ordinary case rather than a pathological one.
+	 * lose to each other come back at the same moment and lose again. Since the callers
+	 * of one adapter queue at a key rather than compete for it, what is left here is a
+	 * conflict with another replica, which is uncommon — but it is also the one kind of
+	 * conflict no amount of queueing can remove.
 	 * @param attempt which attempt just failed, counting from one
 	 */
 	private void backOff(int attempt) {
@@ -587,43 +643,6 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 	private void removeTombstone(byte[] etcdKey, long revision, long lease) {
 		this.client.deleteIfUnchanged(etcdKey, revision);
 		this.client.revokeLeaseQuietly(lease);
-	}
-
-	/** What one mutation does to whatever is under a key. */
-	private interface Mutation<T> {
-
-		/**
-		 * Decides what should replace the current value.
-		 * @param current the value under the key, or {@code null} if it is absent
-		 * @return what to write and what to return
-		 * @throws TypeMismatchException if the key holds another type
-		 */
-		Outcome<T> apply(@Nullable RedisValue current);
-
-	}
-
-	/**
-	 * What a mutation decided.
-	 *
-	 * @param <T> what the operation returns
-	 * @param result what the operation returns to its caller
-	 * @param write the value to store, or {@code null} to store nothing
-	 * @param vanish whether the key should go without being announced, which is what an
-	 * emptied set does
-	 */
-	private record Outcome<T>(T result, @Nullable RedisValue write, boolean vanish) {
-
-		static <T> Outcome<T> write(T result, RedisValue value) {
-			return new Outcome<>(result, value, false);
-		}
-
-		static <T> Outcome<T> nothing(T result) {
-			return new Outcome<>(result, null, false);
-		}
-
-		static <T> Outcome<T> vanish(T result) {
-			return new Outcome<>(result, null, true);
-		}
 	}
 
 	private EtcdException contention(String operation, byte[] key) {

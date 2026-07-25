@@ -69,6 +69,12 @@ research; if you need them again, unzip
   with a known factor, 020 is a defect. Neither needs anything 017 does. **021** (a write too
   large for the cluster gets its own error) is the smallest of the three and touches the core's
   error mapping rather than the etcd backend, so it is the one that affects every backend.
+- **020** was done 2026-07-25, by batching rather than by the key-per-member layout it also
+  weighed: the callers of one adapter now queue at a key (`KeyQueues`) and whoever holds it
+  applies everything queued in one transaction. At 256 writers to one bucket that is 0.010 etcd
+  calls per write instead of 15, and none lost instead of 19%. It leaves 019 untouched — a save
+  still costs 12 raft writes — and it leaves the *size* of a bucket untouched, which is the one
+  thing a key per member would still address.
 
 ## Definition of done (every task)
 
@@ -104,5 +110,5 @@ research; if you need them again, unzip
 | 017 | Health indicator for a backend that can be unreachable | not started |
 | 018 | Measure what the etcd backend costs | done |
 | 019 | Cut the raft writes a session save costs | not started |
-| 020 | A contended key must not fail a session save | not started |
+| 020 | A contended key must not fail a session save | done |
 | 021 | A write etcd is too small for deserves its own error | not started |

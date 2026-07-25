@@ -439,19 +439,42 @@ update. `RENAME` is one transaction too (tombstone the source, write the destina
 followed by removing the tombstone; the SPI already allows it not to be atomic across its
 two keys.
 
-Two things make retrying work rather than livelock, both found by the concurrency test
-rather than by reasoning:
+That settles the conflicts *between* replicas. It does not survive the conflicts an adapter
+has with **itself**. Compare-and-swap on one key does not degrade gracefully: the work per
+successful write grows with the number of writers, so past some concurrency the retries stop
+keeping up and a share of the writes is simply lost — a *failed* session save, not a slow
+one. At 256 callers writing one expirations bucket the measurement found 15 etcd calls per
+successful write and 19% of them failing outright. And Spring Session has exactly one
+genuinely contended key: every session expiring in the same minute adds itself to that
+minute's set, so this was the ordinary case rather than a pathological one. Retrying is what
+makes contention *correct*; it is not what makes it scale.
+
+So the callers of one adapter do not compete for a key, they **queue at it** (`KeyQueues`):
+
+- everything one adapter does to a key — a mutation, a deadline, a removal, the source of a
+  rename — is done with the key to itself. A `RENAME`'s destination is the exception: Redis
+  overwrites it whatever it held, so there is nothing there to lose;
+- the mutations that pile up while one of them is in flight are applied **together**: one
+  value read once, every queued mutation applied to it in the order its caller arrived, one
+  transaction, and each caller handed its own answer. That is what serialized execution would
+  have produced, which is what Redis — which serializes these anyway — would have produced,
+  so nothing about the SPI's answers, its events or the silence of an emptied set changes.
+
+N concurrent writes to one key therefore cost one etcd write instead of N × however many
+attempts each of them needed, and the cost per write *falls* as the contention rises rather
+than growing with it (§11.6). Two things a batch has to get right, and both are proved
+without etcd in `KeyQueuesTest`, where a batch is held open rather than hoped for: a mutation
+that refuses the value it is given fails its own caller and nobody else, and a set that
+empties part-way through a batch makes what follows it a *new* key, carrying none of the old
+one's deadline.
+
+What is left for compare-and-swap is a conflict with another replica — uncommon, but the one
+kind of conflict no amount of queueing can remove. Two things make retrying it work rather
+than livelock, both found by the concurrency test rather than by reasoning:
 
 - the transaction that refuses a write **reads the key back in its failure branch**, so a
   retry costs one round trip instead of two and the window it can lose in again is halved;
-- retries **back off** by a randomized, growing delay (capped at 50 ms). Spring Session has
-  one genuinely contended key — every session expiring in the same minute adds itself to
-  that minute's set — so this is the ordinary case.
-
-This holds up to a point that §11.6 measures and that no correctness test reached: past
-roughly a hundred concurrent writers to a single key, the retries stop keeping up and a share
-of the writes fails. Retrying is what makes contention *correct*; it is not what makes it
-scale.
+- retries **back off** by a randomized, growing delay (capped at 50 ms).
 
 ### 11.5 How it is proved
 
@@ -461,12 +484,19 @@ enough: each one found something.
 
 | Suite | What only a real etcd (or a real outage) can say |
 |---|---|
-| `EtcdKeyValueStoreTest` | the SPI contract, lease-driven expiry, the silence of a rename, two stores as two replicas, concurrent writes. Found the retry livelock (§11.4). |
+| `EtcdKeyValueStoreTest` | the SPI contract, lease-driven expiry, the silence of a rename, two stores as two replicas, concurrent writes. Found the retry livelock (§11.4), and now holds the 256-writer case that compare-and-swap alone lost a fifth of. |
 | `EtcdWatchReconnectTest` | a removal **and** an expiry that happen while the watch is down are announced when it comes back. Uses a `TcpProxy` the test can blackhole, because etcd has to stay up to be written to while a store is blind. |
 | `EtcdEndpointFailoverTest` | a member that stops serving is passed over; a store built while the whole cluster is away still serves once it is back. |
 | `EtcdAuthenticationTest` | a protected cluster, and a token the cluster has forgotten. Found that a **watch** is refused *inside its stream* (HTTP 200, then a cancellation saying the token is invalid), so the token has to be discarded from there or the watch reopens forever with a dead one and the application is never told another session ended. |
 | `EtcdBackendEndToEndTests` (server) | stock Spring Session over Lettuce: expiry reaching `SessionExpiredEvent` through etcd's lease and watch, and a session another adapter removed reaching this one's subscriber. |
 | `EtcdBackendTlsTests` (server) | `redis-adapter.etcd.ssl-bundle` gets the store onto an encrypted etcd — and without the bundle the same store cannot connect, which is what says the bundle did it. |
+
+One suite deliberately runs *without* etcd: `KeyQueuesTest`, for the queueing of §11.4. What
+has to hold there — that a batch is really one batch, that no caller is passed over, that one
+caller's failure is not everybody's, that a set emptied part-way through a batch is a new key
+afterwards — is about the queueing rather than the store underneath, and against a real etcd
+every one of those assertions would be probabilistic. Each case that turns on timing holds a
+batch open instead of hoping for one.
 
 The watch-startup gap (§11.3) is the one property with no test of its own: it is a race, so a
 test would pass either way. It is closed by construction instead — the revision is read before
@@ -486,11 +516,13 @@ because they are the design's own consequences rather than one machine's:
   the cluster's raft write rate divided by twelve, and nothing else matters as much.
 - **Reads are almost free and writes are not**: one `Range` against `Txn`-plus-lease-work, or
   0.5 ms against 15 ms on a single-member container whose commits take 3 ms.
-- **Compare-and-swap on one key does not degrade gracefully.** At 256 concurrent writers to
-  one expirations bucket, the calls per successful write rose to 15 and 19% of the writes
-  failed after 50 attempts. This is a defect (`.todo/020-etcd-contended-key.md`), and it is the
-  one thing the measurement found that the tests could not: every correctness suite writes
-  from a handful of threads, where retrying works exactly as §11.4 says.
+- **Contention on one key costs less the more of it there is** — now. It is the one thing the
+  measurement found that the tests could not, because every correctness suite wrote from a
+  handful of threads: at 256 concurrent writers to one expirations bucket the calls per
+  successful write had risen to 15 and 19% of the writes failed outright. Queueing at the key
+  and applying the queue as one batch (§11.4) turned that into 0.010 calls per write and
+  nothing lost — 247 → 22,290 writes per second. What a batch has to answer is now covered by
+  a test, so the direction cannot silently reverse.
 
 ### 11.7 What is deliberately not there
 
@@ -506,9 +538,10 @@ because they are the design's own consequences rather than one machine's:
   1 KB hash to change one field measured 1.33 ms against 1.08 ms to write it new: inside the
   noise of a raft commit, and only about a millisecond apart at 100 KB. Keys per field would
   buy that and pay a range read per `HGETALL`, a multi-key transaction per `HSET` and an
-  expiry attached to every field. A **set** is the collection whose cost really grows (7 ms to
-  add to a bucket of 10,000 against 1 ms to an empty one), so that is where a layout change
-  would be worth considering, together with the contention above.
+  expiry attached to every field. A **set** is the collection whose cost really grows (10 ms
+  to add to a bucket of 10,000 against 1 ms to an empty one), so that is where a layout change
+  — one etcd key per member — would still be worth considering. It is no longer the answer to
+  contention, which §11.4 settles; it is the answer to a bucket's *size*.
 - **Clocks.** Deadlines are absolute milliseconds on the *adapter's* clock, so replicas
   need their clocks roughly in step, which an etcd cluster needs anyway. Skew shows up as a
   key expiring that much early or late, never as a lost session.

@@ -420,10 +420,10 @@ before planning around it. Measured against a single-member etcd in a container 
 3 ms; `.docs/design/etcd-performance.md` has the full numbers and the harness that takes them, so
 you can take your own.
 
-- **A session write costs about 15 ms and twelve etcd raft writes**, a read about half a
-  millisecond and one read call. Sessions written per second come out at roughly the cluster's
+- **A session write costs tens of milliseconds and twelve etcd raft writes**, a read about half
+  a millisecond and one read call. Sessions written per second come out at roughly the cluster's
   raft write rate divided by twelve; reads barely enter into it.
-- **One client connection carries about 30 session writes per second.** Commands on a connection
+- **One client connection carries 20 to 30 session writes per second.** Commands on a connection
   are served in order, as Redis serves them, so an application sharing one Lettuce connection
   queues behind itself. More application instances, or more connections, multiply it.
 - **Keep session attributes in the tens of kilobytes.** Below that the raft commit dominates and
@@ -431,9 +431,12 @@ you can take your own.
   `--max-request-bytes` (1.5 MiB by default) the write is refused outright and the client is told
   `ERR internal error`, with etcd's reason in the adapter's log. A cluster also has a total size
   limit (`--quota-backend-bytes`, 2 GiB by default).
-- **One key is contended by design**: every session expiring in the same minute joins that
-  minute's set. Past a few hundred writers to it at once, writes currently fail instead of merely
-  slowing down — a known defect rather than a limit of etcd.
+- **One key is contended by design**, and that is handled: every session expiring in the same
+  minute joins that minute's set, so the adapter applies the writes waiting for one key together,
+  in a single etcd transaction, instead of letting them compete. Hundreds of writers at once
+  therefore cost *less* per write rather than more (0.01 etcd calls per write at 256 writers,
+  against 15 without it). What still grows is the bucket itself: adding to a minute that already
+  holds 10,000 sessions costs about 10 ms, however few writers there are.
 
 ## What is implemented
 
@@ -578,11 +581,13 @@ The performance harness is not part of that build — it measures rather than as
 minutes. Run it on its own:
 
 ```bash
-./mvnw test -Pperformance -pl redis-adapter-for-spring-session-server
+./mvnw test -Pperformance -pl redis-adapter-for-spring-session-server -am
 ```
 
 It reports what each backend costs, at the SPI and through a real client, and writes its tables to
-`target/performance/`. `.docs/design/etcd-performance.md` is one run of it, written up.
+`target/performance/`. `.docs/design/etcd-performance.md` is one run of it, written up. Keep the
+`-am`: the harness lives in the server module but measures the backend modules, and without it
+they come from the local repository rather than from your working copy.
 
 The build has four modules:
 

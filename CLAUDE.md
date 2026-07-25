@@ -8,13 +8,15 @@ repository.
 ```bash
 ./mvnw clean spring-javaformat:apply compile                    # Compile application
 ./mvnw spring-javaformat:apply test                             # Run all tests
-./mvnw test -Pperformance -pl redis-adapter-for-spring-session-server   # Measure the backends
+./mvnw test -Pperformance -pl redis-adapter-for-spring-session-server -am   # Measure the backends
 ```
 
 The last one is the performance harness. It is kept out of an ordinary build by the
 `performance` JUnit tag (surefire's `excludedGroups`, cleared by that profile) because it takes
 minutes and asserts nothing; it reports, and `.docs/design/etcd-performance.md` is one run of it
-written up.
+written up. The `-am` is not optional: the harness lives in the server module and measures the
+backends, so without it a change to a backend module is measured as the last *installed* jar of
+it and the report is quietly a run of the old code.
 
 ## Design Requirements
 - **Package**: `am.ik.redis.adapter` - Main package (core module); the in-memory backend module uses `am.ik.redis.adapter.inmemory`, the etcd backend module `am.ik.redis.adapter.etcd`, and the Spring Boot server module `am.ik.redis.adapter.boot`. A package is never split across two modules.
