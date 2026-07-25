@@ -26,6 +26,11 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<spring-boot.version>4.1.0</spring-boot.version>
 		<archunit.version>1.4.1</archunit.version>
+		<!-- The performance harness measures a backend rather than asserting anything about it,
+		     so it is not part of an ordinary build: it takes minutes and its numbers are only
+		     meaningful when nothing else is running. The "performance" profile is what runs it. -->
+		<surefire.groups/>
+		<surefire.excluded.groups>performance</surefire.excluded.groups>
 		<!-- Do not fail the release when a module has no documentable types yet (modules are
 		     filled in task by task). Central still receives a javadoc jar. -->
 		<maven.javadoc.failOnError>false</maven.javadoc.failOnError>
@@ -71,6 +76,20 @@
 		</dependencies>
 	</dependencyManagement>
 
+	<profiles>
+		<!-- ./mvnw test -Pperformance -pl redis-adapter-for-spring-session-server
+		     Runs only the performance harness, against a real etcd in a container. It measures
+		     and reports; it asserts almost nothing, so a failure here means the harness could
+		     not run rather than that a backend got slower. -->
+		<profile>
+			<id>performance</id>
+			<properties>
+				<surefire.groups>performance</surefire.groups>
+				<surefire.excluded.groups/>
+			</properties>
+		</profile>
+	</profiles>
+
 	<build>
 		<pluginManagement>
 			<plugins>
@@ -83,6 +102,10 @@
 					<groupId>org.apache.maven.plugins</groupId>
 					<artifactId>maven-surefire-plugin</artifactId>
 					<version>3.5.6</version>
+					<configuration>
+						<groups>${surefire.groups}</groups>
+						<excludedGroups>${surefire.excluded.groups}</excludedGroups>
+					</configuration>
 				</plugin>
 				<plugin>
 					<groupId>am.ik.maven</groupId>

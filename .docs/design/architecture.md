@@ -346,6 +346,7 @@ rotation — the adapter follows whatever bundle it was pointed at.
 ## 10. Reference material in this repo
 
 - `.docs/design/redis-command-surface.md` — durable, distilled command/keyspace reference.
+- `.docs/design/etcd-performance.md` — what the etcd backend costs, and the harness that says so.
 - `.docs/research/01-non-indexed-command-mapping.md` — exact `RedisSessionRepository` →
   Redis command mapping.
 - `.docs/research/02-indexed-command-mapping.md` — exact `RedisIndexedSessionRepository`
@@ -447,6 +448,11 @@ rather than by reasoning:
   one genuinely contended key — every session expiring in the same minute adds itself to
   that minute's set — so this is the ordinary case.
 
+This holds up to a point that §11.6 measures and that no correctness test reached: past
+roughly a hundred concurrent writers to a single key, the retries stop keeping up and a share
+of the writes fails. Retrying is what makes contention *correct*; it is not what makes it
+scale.
+
 ### 11.5 How it is proved
 
 Everything runs against a real etcd in a container (`quay.io/coreos/etcd:v3.7.1`, pinned so a
@@ -466,14 +472,43 @@ The watch-startup gap (§11.3) is the one property with no test of its own: it i
 test would pass either way. It is closed by construction instead — the revision is read before
 the watch thread starts.
 
-### 11.6 What is deliberately not there
+### 11.6 What it costs (measured 2026-07-25)
+
+Correctness was proved first and the cost measured afterwards;
+`.docs/design/etcd-performance.md` is that measurement, taken by a harness in the server
+module that is excluded from an ordinary build (`./mvnw test -Pperformance -pl
+redis-adapter-for-spring-session-server`). Three numbers from it belong in the design itself,
+because they are the design's own consequences rather than one machine's:
+
+- **A session save is 12 raft writes**, of which 9 come from the three `PEXPIREAT`s Spring
+  Session issues per save — a `PEXPIREAT` on a key that already has a TTL grants a lease,
+  writes the value and revokes the old lease. Session writes per second are therefore about
+  the cluster's raft write rate divided by twelve, and nothing else matters as much.
+- **Reads are almost free and writes are not**: one `Range` against `Txn`-plus-lease-work, or
+  0.5 ms against 15 ms on a single-member container whose commits take 3 ms.
+- **Compare-and-swap on one key does not degrade gracefully.** At 256 concurrent writers to
+  one expirations bucket, the calls per successful write rose to 15 and 19% of the writes
+  failed after 50 attempts. This is a defect (`.todo/020-etcd-contended-key.md`), and it is the
+  one thing the measurement found that the tests could not: every correctness suite writes
+  from a handful of threads, where retrying works exactly as §11.4 says.
+
+### 11.7 What is deliberately not there
 
 - **No health indicator yet.** README promises that "a backend that can be unreachable
   contributes a health indicator of its own"; `EtcdKeyValueStore.checkHealth()` is the
   method one would be built on. See `.todo/017-etcd-health-indicator.md`.
-- **No lease reuse across `expireAt` calls.** A keepalive on the existing lease would save
-  one raft operation per session save when the TTL is unchanged; grant-and-revoke is
-  simpler and already bounds the number of live leases to one per live key.
+- **No lease reuse across `expireAt` calls** — *decided, and it should be built.* The
+  measurement above puts a number on what grant-and-revoke costs: three raft writes per
+  `PEXPIREAT`, three `PEXPIREAT`s per save, so two thirds of a save's writes. A
+  `LeaseKeepAlive` renews a lease for its original TTL without a raft write, which is exactly
+  the case Spring Session hits on every request. `.todo/019-etcd-fewer-raft-writes.md`.
+- **No field-granular hashes** — *decided, and it should not be built.* Rewriting a whole
+  1 KB hash to change one field measured 1.33 ms against 1.08 ms to write it new: inside the
+  noise of a raft commit, and only about a millisecond apart at 100 KB. Keys per field would
+  buy that and pay a range read per `HGETALL`, a multi-key transaction per `HSET` and an
+  expiry attached to every field. A **set** is the collection whose cost really grows (7 ms to
+  add to a bucket of 10,000 against 1 ms to an empty one), so that is where a layout change
+  would be worth considering, together with the contention above.
 - **Clocks.** Deadlines are absolute milliseconds on the *adapter's* clock, so replicas
   need their clocks roughly in step, which an etcd cluster needs anyway. Skew shows up as a
   key expiring that much early or late, never as a lost session.

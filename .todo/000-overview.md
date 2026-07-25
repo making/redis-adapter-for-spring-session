@@ -60,9 +60,15 @@ research; if you need them again, unzip
   backend which can be unreachable contributes a health indicator, and none does yet.
 - **018** (etcd performance) closes the other one: 016's correctness is proved against a real
   etcd and its cost is not measured at all. It blocks nothing, but it decides whether the two
-  optimizations §11.6 of the architecture lists are worth their complexity, and it is what
+  optimizations §11.7 of the architecture lists are worth their complexity, and it is what
   turns README's qualitative advice about session size into something an operator can plan
-  with.
+  with. Done 2026-07-25; `.docs/design/etcd-performance.md` is the result, and it decided both
+  optimizations and turned up three things of its own: **019**, **020** and **021**.
+- **019** (fewer raft writes per save) and **020** (a contended key must not fail a save) both
+  come out of 018's numbers and are independent of each other; 019 is a throughput improvement
+  with a known factor, 020 is a defect. Neither needs anything 017 does. **021** (a write too
+  large for the cluster gets its own error) is the smallest of the three and touches the core's
+  error mapping rather than the etcd backend, so it is the one that affects every backend.
 
 ## Definition of done (every task)
 
@@ -96,4 +102,7 @@ research; if you need them again, unzip
 | 015 | Reload the server certificate without a restart (optional) | done |
 | 016 | etcd backend (shared, so several adapters serve the same sessions) | done |
 | 017 | Health indicator for a backend that can be unreachable | not started |
-| 018 | Measure what the etcd backend costs | not started |
+| 018 | Measure what the etcd backend costs | done |
+| 019 | Cut the raft writes a session save costs | not started |
+| 020 | A contended key must not fail a session save | not started |
+| 021 | A write etcd is too small for deserves its own error | not started |

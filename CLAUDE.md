@@ -8,7 +8,13 @@ repository.
 ```bash
 ./mvnw clean spring-javaformat:apply compile                    # Compile application
 ./mvnw spring-javaformat:apply test                             # Run all tests
+./mvnw test -Pperformance -pl redis-adapter-for-spring-session-server   # Measure the backends
 ```
+
+The last one is the performance harness. It is kept out of an ordinary build by the
+`performance` JUnit tag (surefire's `excludedGroups`, cleared by that profile) because it takes
+minutes and asserts nothing; it reports, and `.docs/design/etcd-performance.md` is one run of it
+written up.
 
 ## Design Requirements
 - **Package**: `am.ik.redis.adapter` - Main package (core module); the in-memory backend module uses `am.ik.redis.adapter.inmemory`, the etcd backend module `am.ik.redis.adapter.etcd`, and the Spring Boot server module `am.ik.redis.adapter.boot`. A package is never split across two modules.
@@ -32,7 +38,8 @@ repository.
 - Two backends: in-memory (default, single-node) and etcd (shared, so several adapters serve the
   same sessions and a key one of them expires is announced to the clients of all of them).
   `.docs/design/architecture.md` §11 is the etcd design, including why the events come from a watch
-  and what a tombstone is for.
+  and what a tombstone is for, and §11.6 what it costs. A session write is twelve etcd raft writes,
+  so anything added to the write path is measured in those, not in lines of code.
 
 Two rules constrain anything added here:
 

@@ -412,9 +412,28 @@ is `redis-adapter.etcd.username` / `password`, and an `https://` endpoint is rea
 bundle named by `redis-adapter.etcd.ssl-bundle` — the same bundles the adapter's own port uses,
 including a client certificate for mutual TLS.
 
-etcd keeps every value in memory and replicates it to every member, and it is not built for large
-values: keep session attributes small, and mind that a cluster has a total size limit
-(`--quota-backend-bytes`, 2 GiB by default).
+#### What it costs
+
+etcd keeps every value in memory, replicates it to every member and commits every write to disk,
+so a session write costs more here than it does against Redis and it is worth knowing how much
+before planning around it. Measured against a single-member etcd in a container whose commits took
+3 ms; `.docs/design/etcd-performance.md` has the full numbers and the harness that takes them, so
+you can take your own.
+
+- **A session write costs about 15 ms and twelve etcd raft writes**, a read about half a
+  millisecond and one read call. Sessions written per second come out at roughly the cluster's
+  raft write rate divided by twelve; reads barely enter into it.
+- **One client connection carries about 30 session writes per second.** Commands on a connection
+  are served in order, as Redis serves them, so an application sharing one Lettuce connection
+  queues behind itself. More application instances, or more connections, multiply it.
+- **Keep session attributes in the tens of kilobytes.** Below that the raft commit dominates and
+  the bytes are noise — a 100 KB session costs about three times a 1 KB one. Above etcd's
+  `--max-request-bytes` (1.5 MiB by default) the write is refused outright and the client is told
+  `ERR internal error`, with etcd's reason in the adapter's log. A cluster also has a total size
+  limit (`--quota-backend-bytes`, 2 GiB by default).
+- **One key is contended by design**: every session expiring in the same minute joins that
+  minute's set. Past a few hundred writers to it at once, writes currently fail instead of merely
+  slowing down — a known defect rather than a limit of etcd.
 
 ## What is implemented
 
@@ -541,7 +560,8 @@ backend keeps read-modify-write atomic across replicas, and how it carries key e
 - The default backend is single-node and in-memory: sessions do not survive a restart and are not
   shared between adapter replicas. Sharing them means [etcd](#etcd) or a backend of your own.
 - The etcd backend inherits etcd's shape: values are kept in memory and replicated to every member,
-  so it suits sessions rather than large payloads, and a cluster has a total size limit.
+  so it suits sessions rather than large payloads, and a cluster has a total size limit. What it
+  costs is measured in [What it costs](#what-it-costs) rather than left to be discovered.
 
 ## Building from source
 
@@ -553,6 +573,16 @@ Java 25 or later.
 
 The etcd backend's tests start a real etcd in a container, so a Docker (or compatible) daemon has to
 be running for the full build.
+
+The performance harness is not part of that build — it measures rather than asserts, and it takes
+minutes. Run it on its own:
+
+```bash
+./mvnw test -Pperformance -pl redis-adapter-for-spring-session-server
+```
+
+It reports what each backend costs, at the SPI and through a real client, and writes its tables to
+`target/performance/`. `.docs/design/etcd-performance.md` is one run of it, written up.
 
 The build has four modules:
 
@@ -570,6 +600,7 @@ run; `ReadmeExamplesTests` fails if the two drift apart.
 
 - `.docs/design/architecture.md` — the design and the reasoning behind it.
 - `.docs/design/redis-command-surface.md` — the exact command and keyspace behaviour.
+- `.docs/design/etcd-performance.md` — what the etcd backend costs, and how it was measured.
 - `.docs/research/` — how Spring Session uses Redis, cited line by line.
 
 ## License
