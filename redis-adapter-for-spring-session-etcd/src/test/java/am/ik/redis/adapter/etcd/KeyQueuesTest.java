@@ -59,8 +59,7 @@ class KeyQueuesTest {
 		this.store.holdTheNextRound();
 		Thread first = adding("first");
 		this.store.awaitApplying();
-		List<Thread> rest = List.of(adding("second"), adding("third"), adding("fourth"));
-		awaitQueuedAtTheKey(rest);
+		List<Thread> rest = addingInTurn("second", "third", "fourth");
 
 		this.store.release();
 		join(first);
@@ -107,8 +106,7 @@ class KeyQueuesTest {
 			return "done";
 		}));
 		holding.await();
-		List<Thread> adding = List.of(adding("a"), adding("b"));
-		awaitQueuedAtTheKey(adding);
+		List<Thread> adding = addingInTurn("a", "b");
 
 		assertThat(this.store.rounds()).isZero();
 
@@ -144,8 +142,7 @@ class KeyQueuesTest {
 		this.store.holdTheNextRound();
 		Thread first = adding("first");
 		this.store.awaitApplying();
-		List<Thread> rest = List.of(adding("second"), adding("third"));
-		awaitQueuedAtTheKey(rest);
+		List<Thread> rest = addingInTurn("second", "third");
 
 		this.store.release();
 		join(first);
@@ -357,6 +354,25 @@ class KeyQueuesTest {
 		});
 	}
 
+	/**
+	 * Starts one caller per member, each only once the one before it is queued at the
+	 * key, and so forms a batch in the order the members are given. Starting them all at
+	 * once would leave the order they queue in to the scheduler, and a batch is applied
+	 * in the order its callers arrived — there would be nothing to assert about what it
+	 * left behind.
+	 * @param members the members to add, in the order the callers are to arrive
+	 * @return the threads, all running and all queued
+	 */
+	private List<Thread> addingInTurn(String... members) throws InterruptedException {
+		List<Thread> threads = new ArrayList<>();
+		for (String member : members) {
+			Thread thread = adding(member);
+			awaitQueuedAtTheKey(thread);
+			threads.add(thread);
+		}
+		return List.copyOf(threads);
+	}
+
 	private static Thread started(String name, Runnable body) {
 		Thread thread = new Thread(body, name);
 		thread.start();
@@ -364,19 +380,18 @@ class KeyQueuesTest {
 	}
 
 	/**
-	 * Waits until every thread is parked at the key, which is what makes the batch behind
-	 * a held-open one provably contain all of them rather than probably.
-	 * @param threads the callers expected to be queued
+	 * Waits until a thread is parked at the key, which is what makes the batch behind a
+	 * held-open one provably contain it rather than probably. A caller queues its
+	 * mutation before it asks for the key's lock, so a caller that is parked has queued.
+	 * @param thread the caller expected to be queued
 	 */
-	private static void awaitQueuedAtTheKey(List<Thread> threads) throws InterruptedException {
-		for (Thread thread : threads) {
-			long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-			while (thread.getState() != Thread.State.WAITING) {
-				if (System.nanoTime() > deadline) {
-					throw new AssertionError(thread.getName() + " never queued at the key");
-				}
-				Thread.sleep(1);
+	private static void awaitQueuedAtTheKey(Thread thread) throws InterruptedException {
+		long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+		while (thread.getState() != Thread.State.WAITING) {
+			if (System.nanoTime() > deadline) {
+				throw new AssertionError(thread.getName() + " never queued at the key");
 			}
+			Thread.sleep(1);
 		}
 	}
 
