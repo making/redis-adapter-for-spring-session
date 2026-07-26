@@ -119,3 +119,4 @@ research; if you need them again, unzip
 | 019 | Cut the raft writes a session save costs | done |
 | 020 | A contended key must not fail a session save | done |
 | 021 | A write etcd is too small for deserves its own error | not started |
+| 022 | A FoundationDB backend | spiked, ready to build |

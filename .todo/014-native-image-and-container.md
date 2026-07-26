@@ -86,3 +86,10 @@ can still configure everything through environment variables in either image.
   connection plus a platform thread for the accept loop.
 - The `KeyValueStore` SPI reflects on nothing today. A future backend that ships a driver
   may need hints of its own — that is that backend module's business, not the core's.
+- **A native image is best effort, per backend** (decided 2026-07-26). The JVM container
+  image is the baseline every backend has to reach; a native image is a bonus for whichever
+  ones it happens to work for. A backend nobody has managed to build one for is still a
+  supported backend, and this task is not a gate on adding one. The FoundationDB backend of
+  task 022 is the first that would make this bite: it needs JNI configuration for
+  `org.foundationdb:fdb-java` and a 24 MB `libfdb_c` inside the image, and if that turns
+  out not to be worth it, say so and move on rather than holding the backend back.
