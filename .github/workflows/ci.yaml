@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        example: [session-example-etcd, session-example-dynamodb]
+        example: [session-example-etcd, session-example-dynamodb, session-example-foundationdb]
     steps:
     - uses: actions/checkout@v7
     - name: Set up JDK 25

@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Session example</title>
+	<link rel="stylesheet" th:href="@{/example.css}">
+</head>
+<body>
+<main>
+	<h1>Spring Session over the Redis adapter</h1>
+	<p class="lead">
+		What you type below is kept in the HTTP session. The session is written over the Redis
+		protocol to the adapter, and the adapter keeps it in FoundationDB — so any instance of
+		this application can serve it.
+	</p>
+
+	<form th:if="${visitor == null}" method="post" th:action="@{/sign-in}">
+		<label for="name">Your name</label>
+		<input type="text" id="name" name="name" autocomplete="off" required autofocus>
+		<button type="submit" id="sign-in">Sign in</button>
+	</form>
+
+	<div th:if="${visitor != null}">
+		<p id="greeting" th:text="'Hello, ' + ${visitor.name} + '.'">Hello.</p>
+		<dl>
+			<dt>Page views in this session</dt>
+			<dd id="visits" th:text="${visitor.visits}">1</dd>
+			<dt>Session id</dt>
+			<dd id="session-id" th:text="${sessionId}"></dd>
+			<dt>Served by</dt>
+			<dd id="instance" th:text="${instanceName}"></dd>
+		</dl>
+		<form method="post" th:action="@{/sign-out}">
+			<button type="submit" id="sign-out">Sign out</button>
+		</form>
+	</div>
+
+	<p class="note">
+		Reload the page and the count goes up. Stop this instance, start another one against the
+		same cluster, and the count carries on where it was.
+	</p>
+</main>
+</body>
+</html>

@@ -1031,6 +1031,18 @@ same registration.
 | `FoundationDbLimitsTest` | the three ceilings and that each is refused as `ValueTooLargeException` with nothing written; a transaction bounded by its timeout against an unreachable cluster |
 | `FoundationDbBackendEndToEndTests` (server) | stock Spring Session over Lettuce in indexed mode: a session left to expire reaching `SessionExpiredEvent` through the sweeper and the log, and a session another adapter removed reaching this one's subscriber |
 
+Beside those there is `examples/session-example-foundationdb` (added 2026-07-26), which is the
+same browser-driven example the other shared backends have: two application instances, an adapter
+each, one cluster, and the identical assertions run against a real Redis under a profile. Neither
+of the two things that make this backend awkward reaches it. **The port identity above is a
+constraint on a client that crosses the host**, and the adapters do not — they sit on the
+cluster's Docker network and reach the advertised address directly, so the fixture is an ordinary
+one and the cluster file is simply read out of the container that wrote it. **And `libfdb_c` is a
+property of the adapter's image**, put there by copying it out of the FoundationDB image the
+cluster itself runs (`COPY --from`), which is both the shortest statement of what a deployment
+does and version-matched by construction. The example application links against nothing, which is
+the claim §13.5 makes and the one an operator most needs to believe.
+
 ### 13.8 What it costs (measured 2026-07-26)
 
 Correctness was proved first and the cost measured afterwards, by the same harness and the same
@@ -1080,7 +1092,8 @@ counter can say.
 - **No multi-version client.** The spike only ever ran 7.3.63 against 7.3.63; whether a client of
   one minor version talks to a cluster of another, and whether configuring the multi-version
   client is worth it, is `.todo/022`'s named follow-up rather than something guessed at here.
-- **No `examples/session-example-foundationdb`.** The example applications run two adapter
-  instances against one store, and the port-identity constraint of §13.7 is a test fixture rather
-  than something to put in front of a reader as the way to run FoundationDB. The end-to-end
-  proof is `FoundationDbBackendEndToEndTests`.
+- **No `examples/session-example-foundationdb`** — until 2026-07-26, when there was. It was left
+  out on the grounds that the port-identity constraint of §13.7 is a test fixture rather than
+  something to put in front of a reader as the way to run FoundationDB; that turned out to be a
+  constraint on a client crossing the host and not on the example at all, since its adapters are
+  on the cluster's own network. §13.7 records what it runs.

@@ -797,6 +797,13 @@ See [its README](examples/session-example-etcd/README.md).
 over the DynamoDB server, its adapters sharing one emulated DynamoDB (Floci) — see
 [its README](examples/session-example-dynamodb/README.md).
 
+[`examples/session-example-foundationdb`](examples/session-example-foundationdb) is the same
+application again, its adapters sharing one FoundationDB. It is also the one place that shows what
+[the native client](#foundationdb) means in practice: the adapter runs on a JRE image with
+`libfdb_c` copied into it out of the FoundationDB image the cluster itself runs, and the
+application still links against nothing. See
+[its README](examples/session-example-foundationdb/README.md).
+
 ## Limitations and non-goals
 
 - Reactive / WebFlux is out of scope. Only the servlet session repositories are tested against the
