@@ -82,6 +82,15 @@ research; if you need them again, unzip
   The TTL a lease renews to travels in the value, which raised the envelope's format byte to 2
   — nothing has been released, so format 1 is refused rather than still read. The two
   remaining ideas of §11.7 are unaffected.
+- **022** and **023** are two candidate backends, each spiked against the real store on
+  2026-07-26 and neither started. They are independent of each other and of everything above,
+  and both are ordinary applications of "Adding a new KVS" — nothing in `core` or `server`
+  changes for either. They fail in opposite places, which is why both files exist: FoundationDB
+  has real multi-key transactions and no TTL at all, Cassandra has a native TTL and a native
+  lease but no push of any kind, so both end up needing a polled event log and a sweeper.
+  **023 carries one decision that must be taken before its store is written** (the layout, and
+  with it what to do about Cassandra's own tombstones), where **022**'s remaining decision is
+  only how to fit a value into 100,000 bytes.
 
 ## Definition of done (every task)
 
@@ -120,3 +129,4 @@ research; if you need them again, unzip
 | 020 | A contended key must not fail a session save | done |
 | 021 | A write etcd is too small for deserves its own error | not started |
 | 022 | A FoundationDB backend | spiked, ready to build |
+| 023 | A Cassandra backend | spiked, one decision short of ready |
