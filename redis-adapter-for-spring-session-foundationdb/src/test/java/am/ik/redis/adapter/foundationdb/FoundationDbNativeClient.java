@@ -63,9 +63,14 @@ public final class FoundationDbNativeClient {
 	}
 
 	/**
-	 * Makes sure the native client is loaded. Every fixture that is about to touch
-	 * FoundationDB calls this first; touching this class is what runs the loading, and
-	 * calling it explicitly is what says <em>when</em>.
+	 * Makes sure the native client is loaded; touching this class is what runs the
+	 * loading, and calling it explicitly is what says <em>when</em>.
+	 *
+	 * <p>
+	 * {@link FoundationDbNativeClientListener} calls this before any test in the JVM
+	 * runs, which is what makes it safe rather than a thing each fixture has to remember
+	 * — a test that touched {@code FDB} first would break the class for the whole JVM and
+	 * take every later test with it.
 	 */
 	public static void ensureLoaded() {
 		// The static initializer above has already done it.

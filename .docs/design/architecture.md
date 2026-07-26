@@ -1012,6 +1012,18 @@ Testcontainers shape, and both are the store's nature rather than incidental:
   dynamic loader then satisfies the JNI shim's own `@rpath` reference from what is already in the
   process, so no test needs an environment variable and surefire needs no configuration.
 
+**"Before anything touches the `FDB` class" is a whole-JVM condition, not a per-fixture one**, and
+getting that wrong is the one way this module fails that looks like a platform problem and is not.
+Most suites reach FoundationDB through the container fixture, which loads the library on the way;
+a test that needs no cluster — an unreachable one, a cluster file that is not there — builds a
+store directly and gets there first. It then fails once with `UnsatisfiedLinkError`, and since a
+class whose initializer threw stays broken for the life of the JVM, *every later test* fails with
+`NoClassDefFoundError`, including the ones that would have loaded it. The whole module therefore
+passes or fails on which class the runner happens to start with. So the load is registered as a
+JUnit `LauncherSessionListener` through `META-INF/services` rather than left to the fixtures, and
+it travels in this module's test-jar so the server module built on the backend is covered by the
+same registration.
+
 | Suite | What only a real FoundationDB can say |
 |---|---|
 | `FoundationDbKeyValueStoreTest` | the SPI contract, the deadline index and passive expiry, the silence of a rename and of an emptied set, two stores as two replicas, concurrent writers to one bucket |
