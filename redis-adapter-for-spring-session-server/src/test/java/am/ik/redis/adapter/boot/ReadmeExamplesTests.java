@@ -51,7 +51,8 @@ class ReadmeExamplesTests {
 	private static final Map<String, String> PROPERTY_TABLES = Map.of("properties:redis-adapter", "this module",
 			"properties:redis-adapter.in-memory", "redis-adapter-for-spring-session-server-inmemory",
 			"properties:redis-adapter.etcd", "redis-adapter-for-spring-session-server-etcd",
-			"properties:redis-adapter.dynamodb", "redis-adapter-for-spring-session-server-dynamodb");
+			"properties:redis-adapter.dynamodb", "redis-adapter-for-spring-session-server-dynamodb",
+			"properties:redis-adapter.foundationdb", "redis-adapter-for-spring-session-server-foundationdb");
 
 	private static Map<String, Path> examples() {
 		Map<String, Path> examples = new LinkedHashMap<>();
@@ -74,6 +75,8 @@ class ReadmeExamplesTests {
 		examples.put("server-etcd-env", backend("server-etcd", "readme/server-etcd.env"));
 		examples.put("server-dynamodb", backend("server-dynamodb", "readme/server-dynamodb.properties"));
 		examples.put("server-dynamodb-env", backend("server-dynamodb", "readme/server-dynamodb.env"));
+		examples.put("server-foundationdb", backend("server-foundationdb", "readme/server-foundationdb.properties"));
+		examples.put("server-foundationdb-env", backend("server-foundationdb", "readme/server-foundationdb.env"));
 		return examples;
 	}
 

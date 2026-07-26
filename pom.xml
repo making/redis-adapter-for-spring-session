@@ -16,10 +16,12 @@
 		<module>redis-adapter-for-spring-session-inmemory</module>
 		<module>redis-adapter-for-spring-session-etcd</module>
 		<module>redis-adapter-for-spring-session-dynamodb</module>
+		<module>redis-adapter-for-spring-session-foundationdb</module>
 		<module>redis-adapter-for-spring-session-server</module>
 		<module>redis-adapter-for-spring-session-server-inmemory</module>
 		<module>redis-adapter-for-spring-session-server-etcd</module>
 		<module>redis-adapter-for-spring-session-server-dynamodb</module>
+		<module>redis-adapter-for-spring-session-server-foundationdb</module>
 	</modules>
 
 	<properties>
@@ -36,6 +38,11 @@
 		<awssdk.version>2.49.3</awssdk.version>
 		<spring-cloud-aws.version>4.1.0</spring-cloud-aws.version>
 		<testcontainers-floci.version>2.12.0</testcontainers-floci.version>
+		<!-- The FoundationDB client, and the version of the FoundationDB the tests run against:
+		     one property, because they must be the same minor version. The jar carries only the
+		     JNI shim, so a deployment installs the matching libfdb_c beside it and the tests
+		     fetch it (.docs/design/architecture.md §13.5, §13.7). -->
+		<foundationdb.version>7.3.63</foundationdb.version>
 		<!-- The performance harness measures a backend rather than asserting anything about it,
 		     so it is not part of an ordinary build: it takes minutes and its numbers are only
 		     meaningful when nothing else is running. The "performance" profile is what runs it. -->

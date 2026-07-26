@@ -11,6 +11,7 @@ import java.util.stream.IntStream;
 import am.ik.redis.adapter.store.KeyValueStore;
 import am.ik.redis.adapter.store.RedisValue;
 import am.ik.redis.adapter.store.SetValue;
+import am.ik.redis.adapter.store.ValueTooLargeException;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 
@@ -134,6 +135,12 @@ public final class BackendSpiBenchmark {
 	 * A session is as big as its attributes, and a backend that rewrites the whole value
 	 * carries all of it on every write: {@code HSET} of one field rewrites the entire
 	 * hash. This is where an operator's "keep session attributes small" gets a number.
+	 *
+	 * <p>
+	 * A size a backend simply refuses is a fact about that backend rather than a broken
+	 * measurement — FoundationDB caps one value at 100,000 bytes — so it is reported and
+	 * the remaining sizes are still measured. The report is what says which sizes a
+	 * backend has numbers for.
 	 */
 	public void sessionsOfEverySize() {
 		String section = "Session size — " + this.backend;
@@ -141,7 +148,14 @@ public final class BackendSpiBenchmark {
 			String id = "sized-" + size + "-" + UUID.randomUUID();
 			Map<byte[], byte[]> fields = sessionFields(size);
 			byte[] session = session(id);
-			this.store.hset(session, fields);
+			try {
+				this.store.hset(session, fields);
+			}
+			catch (ValueTooLargeException e) {
+				this.report.note("A %d KB session is more than the %s backend takes in one attribute, so that size has "
+					.formatted(size / KILOBYTE, this.backend) + "no row below: " + e.getMessage());
+				continue;
+			}
 			String suffix = " (%d KB session)".formatted(size / KILOBYTE);
 			add(section, "HSET, new session" + suffix, i -> {
 				byte[] key = session(id + "-" + i);

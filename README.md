@@ -20,8 +20,8 @@ and configures everything with properties. Only the connection target changes.
                                                             v
                                               +---------------------------+
                                               | in memory, etcd, DynamoDB,|
-                                              | or a store you build a    |
-                                              | server around             |
+                                              | FoundationDB, or a store   |
+                                              | you build a server around  |
                                               +---------------------------+
 ```
 
@@ -61,9 +61,9 @@ Two things are worth knowing before you start:
   sessions in the adapter process, so they are gone when it restarts and are not shared with a
   second adapter; that is the development and single-instance server, and it runs with no
   configuration at all. Running several adapters in front of the same sessions needs a store that
-  is itself shared: [etcd](#etcd) and [DynamoDB](#dynamodb) are published, and anything else is a
-  server you assemble, which is [three small classes](#writing-a-backend) and no fork of this
-  project.
+  is itself shared: [etcd](#etcd), [DynamoDB](#dynamodb) and
+  [FoundationDB](#foundationdb) are published, and anything else is a server you assemble, which
+  is [three small classes](#writing-a-backend) and no fork of this project.
 - **The adapter itself holds no session state.** Everything it is asked to remember goes to the
   backend, so replicas scale as far as the backend does.
 
@@ -274,8 +274,8 @@ The server side of the same connection is [below](#tls-1).
 java -jar redis-adapter-for-spring-session-server-<backend>-<version>-exec.jar
 ```
 
-Which store the sessions land in is which jar this is; the published ones are `inmemory`, `etcd`
-and `dynamodb`, and they are listed under [Backends](#backends). Everything else on this page is
+Which store the sessions land in is which jar this is; the published ones are `inmemory`, `etcd`,
+`dynamodb` and `foundationdb`, and they are listed under [Backends](#backends). Everything else on this page is
 the same whichever one you run.
 
 ### Configuration reference
@@ -362,12 +362,13 @@ The adapter keeps no session state, so replicas behind a load balancer serve the
 but only as far as the backend does. The in-memory server does not, since each replica owns its
 own map. Scaling out means a server built around a store that is shared, and one that can tell a
 replica about a key another replica expired, because that is what an application's
-`SessionExpiredEvent` is made of. [etcd](#etcd) and [DynamoDB](#dynamodb) do both.
+`SessionExpiredEvent` is made of. [etcd](#etcd), [DynamoDB](#dynamodb) and
+[FoundationDB](#foundationdb) do all three.
 
 ## Backends
 
 Each store gets a server of its own, `redis-adapter-for-spring-session-server-<backend>`, and the
-jar you run is the whole of the choice — there is no property to set and nothing to select. Three
+jar you run is the whole of the choice — there is no property to set and nothing to select. Four
 are published, and nothing about the application changes between them. A store this project does
 not ship gets a server of your own; see [Writing a backend](#writing-a-backend).
 
@@ -550,6 +551,86 @@ worth knowing before planning around it (on-demand, us-east-1 rates):
 The tests run against an emulator, because AWS publishes no DynamoDB you can run;
 `.docs/design/architecture.md` §12.6 records exactly what that does and does not prove, and the
 store module carries an opt-in suite against a real table for the difference.
+
+### FoundationDB
+
+`redis-adapter-for-spring-session-server-foundationdb`. Sessions live in a
+[FoundationDB](https://www.foundationdb.org/) cluster, so they are shared by every adapter
+pointed at it and outlive all of them. What it has that the other shared backends do not is real
+multi-key transactions: a session save is one commit, and a session's removal and the
+announcement of it are written together or not at all.
+
+**One thing has to be installed.** FoundationDB serves no HTTP API, so the only way to reach it
+is its native client, `libfdb_c` — which is not in any jar. Install the FoundationDB client
+package matching your cluster's version on the machine or in the image that runs the server. It
+is the one backend here with a prerequisite outside the jar.
+
+The cluster is not named by a URL, either: a FoundationDB client reads a **cluster file** and
+finds the coordinators from it. Name the file, or hand the server its contents and let it write
+one.
+
+<!-- properties:redis-adapter.foundationdb -->
+
+| Property | Default | What it does |
+| --- | --- | --- |
+| `redis-adapter.foundationdb.cluster-file` | none | The path of the cluster file. Leaving both this and `cluster-file-contents` unset leaves the client to look where it always looks (`FDB_CLUSTER_FILE`, then `/etc/foundationdb/fdb.cluster`). |
+| `redis-adapter.foundationdb.cluster-file-contents` | none | The contents of a cluster file to write and use, for a deployment that delivers configuration rather than files. Mutually exclusive with `cluster-file`. |
+| `redis-adapter.foundationdb.api-version` | `730` | The FoundationDB API version to speak. It may be selected only once per JVM, and the installed native client has to support it. |
+| `redis-adapter.foundationdb.key-prefix` | `/redis-adapter/` | Where in the cluster's keyspace the sessions live. Each database gets a keyspace of its own underneath it. |
+| `redis-adapter.foundationdb.transaction-timeout` | `5s` | How long one transaction may take, which bounds how long a Redis command can hang. A read against a cluster that is not there waits for ever without it. |
+| `redis-adapter.foundationdb.watch-timeout` | `5s` | How long one watch on the key-event counter lives before it is renewed. Events arrive as soon as the watch fires; this bounds the wait when a watch is lost. |
+| `redis-adapter.foundationdb.sweep-interval` | `1s` | How long between sweeps for sessions nobody comes back to, which is the longest an abandoned session can sit unannounced. |
+| `redis-adapter.foundationdb.log-retention` | `60s` | How long key-event log entries are kept before the sweeper trims them. A replica away for longer than this loses the events in between, so it is a correctness setting. |
+| `redis-adapter.foundationdb.retry-delay` | `1s` | How long before the follower that delivers session events is started again after it fails. |
+| `redis-adapter.foundationdb.max-attempts` | `10` | How many times FoundationDB retries a transaction that conflicted before giving up. |
+
+<!-- snippet:server-foundationdb -->
+```properties
+redis-adapter.foundationdb.cluster-file=/etc/foundationdb/fdb.cluster
+redis-adapter.foundationdb.key-prefix=/redis-adapter/
+```
+
+The same as environment variables, where there is no file to name so the contents travel instead:
+
+<!-- snippet:server-foundationdb-env -->
+```properties
+REDIS_ADAPTER_FOUNDATIONDB_CLUSTER_FILE_CONTENTS=redis:adapter@fdb-0:4500,fdb-1:4500,fdb-2:4500
+REDIS_ADAPTER_FOUNDATIONDB_KEY_PREFIX=/redis-adapter/
+```
+
+Three things are worth knowing:
+
+- **Expiry is entirely the adapter's.** FoundationDB has no TTL, no lease and nothing resembling
+  one. The exact deadline lives on the key and every read honours it; a sweeper — one replica per
+  database, elected by a lease — removes and announces the sessions nobody comes back to, working
+  from a deadline-ordered index that the same transaction as the deadline keeps in step.
+- **Events cross the adapters through a log the removal writes atomically.** A removal and its
+  announcement are one transaction, so they cannot part company, and every adapter follows the
+  log — which is what carries a `SessionExpiredEvent` to an application connected to a different
+  replica. The log is keyed by FoundationDB's own commit version rather than by a clock, so
+  events arrive in one order everybody agrees on and the replicas' clock skew does not enter into
+  it. A watch wakes each adapter, so an idle fleet costs nothing.
+- **A session attribute has to fit in 100,000 bytes.** That is FoundationDB's ceiling on one
+  value, and it is the one place this backend is tighter than the others. It binds on an
+  attribute rather than on the session, because a hash keeps one key per field; a bigger one is
+  refused with `ERR value too large for the backend`, before anything is written. Collections
+  (the principal index, the expiration buckets) keep one key per member and have no such limit.
+
+#### What it costs
+
+- **A session save is one commit**, not six raft writes as on etcd and not eight billed requests
+  as on DynamoDB, because the whole save is one transaction. The unit to plan in is therefore the
+  cluster's commit rate.
+- **Contention on one key degrades instead of failing**, and the ordinary contended case does not
+  arise at all: every session expiring in the same minute joins that minute's set, and with one
+  key per member those writers are not writing the same key. Nothing conflicts and nothing is
+  lost.
+- **The standing charge is one watch per database, not a poll.** An idle replica wakes only when
+  something is removed. The sweeper's interval is the only recurring work, and it falls on the one
+  elected holder.
+
+`.docs/design/architecture.md` §13 is the design, including the layout the 100,000-byte ceiling
+forces and what the tests do about a native library that is not in the jar.
 
 ## What is implemented
 
@@ -737,8 +818,12 @@ Java 25 or later.
 ./mvnw clean spring-javaformat:apply test
 ```
 
-The etcd backend's tests start a real etcd in a container, and the DynamoDB backend's start the
-Floci emulator in one, so a Docker (or compatible) daemon has to be running for the full build.
+The etcd backend's tests start a real etcd in a container, the DynamoDB backend's start the Floci
+emulator in one, and the FoundationDB backend's start a real FoundationDB, so a Docker (or
+compatible) daemon has to be running for the full build. The FoundationDB tests also fetch the
+native client the driver needs — it is not in any jar — the first time they run on a machine, and
+say so while they do it; it is cached outside `target/`, so a clean build does not fetch it
+again.
 
 The performance harness is not part of that build — it measures rather than asserts, and it takes
 minutes. Run it on its own:
@@ -752,7 +837,7 @@ tables to that module's `target/performance/`. `.docs/design/etcd-performance.md
 written up: the etcd numbers are read against the in-memory ones, which are the same cases with the
 network taken out.
 
-The build has eight modules, in two layers — a store, and the server built around it:
+The build has ten modules, in two layers — a store, and the server built around it:
 
 | Module | What it is |
 | --- | --- |
@@ -760,10 +845,12 @@ The build has eight modules, in two layers — a store, and the server built aro
 | `redis-adapter-for-spring-session-inmemory` | The in-memory backend. Depends on the core only, exactly as an external backend would. |
 | `redis-adapter-for-spring-session-etcd` | The etcd backend. Also depends on the core only: it talks to etcd's HTTP gateway with the JDK's own client, so no gRPC stack is added to the server. Its tests run against a real etcd in a container. |
 | `redis-adapter-for-spring-session-dynamodb` | The DynamoDB backend. Depends on the core and the AWS SDK's `dynamodb` client over the JDK's own HTTP connection — no Netty, no Jackson. Its tests run against the Floci emulator in a container, with an opt-in suite for a real table. |
+| `redis-adapter-for-spring-session-foundationdb` | The FoundationDB backend. Depends on the core and on `fdb-java`, which is one jar with no transitive dependencies but which needs the native `libfdb_c` installed beside it — FoundationDB serves no HTTP API, so unlike etcd there is nothing to choose. Its tests run against a real FoundationDB in a container. |
 | `redis-adapter-for-spring-session-server` | Everything the Spring Boot server is except the backend: the properties, the lifecycle, the actuator, TLS. Holds the compatibility tests that drive it through a real Lettuce client running stock Spring Session, and publishes them as a `test-jar` for the servers built on it. |
 | `redis-adapter-for-spring-session-server-inmemory` | The runnable server around the in-memory backend. |
 | `redis-adapter-for-spring-session-server-etcd` | The runnable server around the etcd backend. |
 | `redis-adapter-for-spring-session-server-dynamodb` | The runnable server around the DynamoDB backend, its client configured through Spring Cloud AWS. |
+| `redis-adapter-for-spring-session-server-foundationdb` | The runnable server around the FoundationDB backend. The image it runs in has to carry the native client. |
 
 Every example in this README is taken from a source file that these modules compile and run;
 `ReadmeExamplesTests` fails if the two drift apart.

@@ -197,6 +197,13 @@ Multi-module Maven (parent = current artifact, packaging `pom`):
   than building one, so where DynamoDB is and how it is signed for stays the caller's
   business. Test deps add Testcontainers and the Floci emulator, with the honesty caveat of
   §12.6.
+- **`redis-adapter-for-spring-session-foundationdb`** — the FoundationDB backend (§13), added
+  2026-07-26. Depends on `core` and on `org.foundationdb:fdb-java`, which is one jar with no
+  transitive dependencies at all but which needs the native `libfdb_c` beside it (§13.5) —
+  there is no HTTP API to reach FoundationDB by, so unlike etcd this is not a choice. The
+  store opens and closes its own database from a cluster file. Test deps add Testcontainers,
+  because a backend is only worth anything against the real thing, and the fixture that finds
+  or fetches `libfdb_c` (§13.7).
 - **`redis-adapter-for-spring-session-server`** — everything the Spring Boot server is
   **except** a backend: `RedisAdapterProperties` (bind address, port, optional auth, DB
   count, TLS), `RedisAdapterServerAutoConfiguration` registered through
@@ -218,7 +225,8 @@ Multi-module Maven (parent = current artifact, packaging `pom`):
   backend, one module per store: `<Backend>BackendProperties`,
   `<Backend>KeyValueStoreFactory`, `<Backend>BackendConfiguration` and a
   `@SpringBootApplication`, in `am.ik.redis.adapter.boot.<backend>`, producing the `exec`
-  jar. `-server-inmemory`, `-server-etcd` and `-server-dynamodb` are the three here. The
+  jar. `-server-inmemory`, `-server-etcd`, `-server-dynamodb` and `-server-foundationdb` are
+  the four here. The
   Spring side of a backend
   lives with the server rather than with the store because `KeyValueStoreFactory` is a
   Spring concept and the store module has no Spring on it.
@@ -782,3 +790,285 @@ Two facts belong in `README.md` because only an operator can weigh them: a trans
 write is billed at **2x** a plain one (the price of §12.2's atomicity), and the poll and
 sweep intervals are standing charges (§12.5) that scale with replicas × databases, not
 with traffic.
+
+## 13. The FoundationDB backend (2026-07-26)
+
+`redis-adapter-for-spring-session-foundationdb` keeps the sessions in a
+[FoundationDB](https://www.foundationdb.org/) cluster. It is the third shared backend, built on
+the spike recorded in `.todo/022-foundationdb-backend.md`. Its one headline finding shapes
+everything below: **FoundationDB has real multi-key ACID transactions**, so a whole session save
+is one commit rather than six raft writes (§11.6) or eight billed requests (§12.7) — and the
+three places §11 and §12 had to build machinery, this backend gets for free.
+
+The other half of the spike is what FoundationDB does *not* have, and each absence forces a
+piece of design: **no TTL** (so expiry is entirely the adapter's, §13.3), **no range watch** (so
+key events travel through a versionstamped log, §13.4), and a **100,000-byte value ceiling**,
+fifteen times smaller than etcd's — which is what decides the layout, and is therefore the first
+thing settled.
+
+### 13.1 The layout: one key per field and per member
+
+**Decided before the store was written, because everything else depends on it.** A value may not
+exceed 100,000 bytes (`FDBException 2103`), a key 10,000 (`2102`) and a whole transaction 10 MB
+(`2101`) — all three measured, all three non-retryable. One `Envelope` per Redis key, the etcd
+layout of §11.2, therefore does not transfer: a Spring Session hash holding a serialized
+principal and a few attributes over 100 KB is entirely ordinary, and it would be refused.
+
+That left chunking a blob across keys against one key per hash field and per collection member.
+**Per-field, per-member keys**, for four reasons, the first two of which are the ones that
+decide it:
+
+- **A range read makes it free.** §11.7 declined this layout for etcd because keys per field
+  would "pay a range read per `HGETALL`, a multi-key transaction per `HSET`, and an expiry
+  attached to every field". FoundationDB charges for none of the three. A range read *is* how
+  FoundationDB reads anything; the multi-key write is one ordinary transaction, not a `Txn`
+  built by hand; and the expiry does not live on the fields at all, it lives on the meta key
+  (§13.3). §12.1 had already reached the same layout for DynamoDB by a different road.
+- **Chunking makes atomicity a problem where there was none.** A chunked blob has to be read,
+  reassembled, rewritten whole and torn down when it shrinks, and every one of those is a
+  correctness question. Per-member keys have no reassembly: `SADD` writes the member's key and
+  touches nothing else.
+- **Contention disappears rather than being managed.** FoundationDB conflicts at the key. Two
+  replicas adding different members to the same expirations bucket write different keys, read
+  different keys, and **do not conflict at all** — so the case §11.4 records etcd losing 19% of
+  at 256 writers, and which needed `KeyQueues` to fix, does not arise. The same holds for two
+  requests setting different fields of one session hash.
+- **The ceiling then binds where Redis's does anyway**: on one attribute, not on the session.
+
+So, under a `Subspace` per database (the configured key prefix, then the database index — which
+is what makes the databases independent keyspaces, and what lets one cluster serve several
+deployments):
+
+| Key | Tuple | Value |
+|---|---|---|
+| Meta, one per Redis key | `("m", key)` | `(type, deadline)` — the deadline is `null` for a key that does not expire |
+| Hash field | `("d", key, field)` | the field's bytes |
+| Set member | `("d", key, member)` | empty |
+| Sorted-set member | `("d", key, member)` | the score |
+| Deadline index | `("x", deadline, key)` | empty |
+| Key-event log | `("e", <versionstamp>)` | `(key, reason, stamp)` |
+| Log counter | `("c")` | a little-endian counter, `ADD`-mutated |
+| Log trim watermark | `("t")` | the versionstamp trimmed through |
+| Sweeper lease | `("s")` | `(holder, leaseUntil)` |
+
+Keys are FoundationDB's own [tuple encoding](https://apple.github.io/foundationdb/data-modeling.html),
+which is in `fdb-java` and adds no dependency. It matters for a reason beyond tidiness: a Redis
+key and a hash field are both arbitrary bytes, so concatenating them with a separator would be
+ambiguous, and tuple encoding is not — while still ordering keys the way a range read needs.
+Nothing is base64-encoded on the way, unlike §12.1, because FoundationDB keys are bytes.
+
+**Reading a key is one range read** over `("d", key)`, plus the meta. **Writing is one
+transaction**, and there is no version counter, no `ConditionCheck` and no compare-and-swap
+anywhere in this backend: a transaction that read the meta conflicts, by itself, with anything
+that wrote it, and FoundationDB retries it. That is the second thing this backend gets for free,
+and it is why `FoundationDbKeyValueStore` is about half the size of `DynamoDbKeyValueStore`.
+
+### 13.2 Removal and its announcement are one transaction, so there are no tombstones
+
+`delete`, passive expiry, the sweeper and an emptied collection all remove a key the same way and
+in **one** transaction: clear the meta, clear the children, clear the deadline-index entry, and —
+when the removal is one Redis announces — append the key-event log entry with the reason (`del`
+or `expired`) written into it as a field.
+
+So the `del`-versus-`expired` guesswork of §11.3 does not exist here, and neither do
+**tombstones**: a removal that must announce nothing (a rename's source, an emptied set) simply
+writes no log entry. That is the third thing multi-key ACID gives for nothing.
+
+`RENAME` is one transaction too — the destination's children and meta written, the source's
+cleared — which is *more* than the SPI asks for (it explicitly allows a rename not to be atomic
+across its two keys). A stale destination is passively expired first, in the same transaction, so
+its death is announced before it is overwritten, exactly as in §11.3.
+
+### 13.3 Expiry is entirely the adapter's: a deadline index and an elected sweeper
+
+FoundationDB has no TTL, no lease and nothing resembling one — it is the one facility etcd's
+design leans on hardest (§11.2) and the largest piece of new work here. The answer is §12.3's,
+with the conditional writes replaced by transactions:
+
+- the **deadline on the meta key** is the expiry, exact to the millisecond, and every read
+  compares against it. A read that finds an overdue key removes it through §13.2, which is what
+  announces it — on this replica and, through the log, on all of them;
+- the **deadline index** (`("x", deadline, key)`) is ordered by deadline, so finding what is due
+  is one range read from the start of the subspace to `now`. It is written and moved by the same
+  transaction that writes the deadline, so it cannot drift out of step with the meta — unlike
+  §12.4's GSI, which is eventually consistent and can only nominate;
+- the **sweeper** announces the keys nobody touches. One replica sweeps per database, elected by
+  a lease at `("s")`: a transaction takes it when it is absent, already this holder's, or lapsed,
+  and renews it while the holder lives. A replica that loses the election keeps reading the log,
+  so it still hears what the holder announces; a dead holder's lease lapses and a live replica
+  takes it. The election is a plain transaction rather than §12.4's conditional `PutItem`,
+  because serializable transactions are what this store is made of.
+
+The sweeper works in **bounded batches** — a capped number of keys per transaction — for the
+reason §13.6 gives: five seconds is the whole life of a transaction, and a body that is always
+too slow retries for ever.
+
+### 13.4 Key events: one watch on a counter, and a versionstamped log
+
+`watch` takes exactly one key, carries no payload, and there is no range watch — so the etcd
+design of §11.3, where the watch itself reports each removal, cannot be built. What the spike
+proved works, and what this backend does:
+
+- every removal that announces appends a log entry at `("e", <versionstamp>)`, using
+  FoundationDB's `SET_VERSIONSTAMPED_KEY` mutation, so the key is stamped with the **commit
+  version** and the log is in commit order by construction;
+- the same transaction bumps a counter at `("c")` with the atomic `ADD` mutation — atomic
+  because `ADD` is a mutation rather than a read-modify-write, and so **adds no conflict**: the
+  counter is a key every replica writes on every removal, and any other way of maintaining it
+  would make it the one contended key in the design;
+- each store keeps a cursor and reads the log forward from it as a range, firing its listeners —
+  **its own removals included**, so every replica hears every event in the same order. It then
+  waits on a `watch` of the counter for the next wake. The watch is established *before* the
+  drain, or a removal committed between the two would not wake anything.
+
+This is better than §12.5's poll in the way that matters: there is **no cursor lag and no clock
+hazard**. Versionstamps are the cluster's own commit order, not a timestamp, so an entry cannot
+be written behind a cursor that has already passed it, and the fleet's clock skew does not enter
+into event delivery at all. What it costs instead is two things the etcd watch gave for free, and
+both are built here:
+
+- **the log has to be trimmed**, or it grows without bound. The sweeper clears entries older than
+  `log-retention` and records how far it trimmed at `("t")`;
+- **a cursor that fell behind a trim has to notice.** A reader whose cursor is below `("t")` has
+  missed entries it can no longer read; it says so in the log and jumps to the watermark. This is
+  etcd's compaction problem (§11.3) with the roles reversed — there etcd tells the watch, here
+  the watermark is what tells it — and the consequence is the same: what was in between is lost,
+  and a session that died during it stays until something touches it. `log-retention` is
+  therefore a correctness setting, not a housekeeping one.
+
+A store also starts its cursor at the **end** of the log rather than the beginning, read before
+the reader thread starts, so a restarted adapter does not replay every event still in the log.
+That is §11.3's watch-startup gap, closed the same way and by the same construction.
+
+### 13.5 The native client, which is the price of admission
+
+There is no avoiding a driver. etcd was reachable over its gRPC gateway with the JDK's
+`HttpClient` (§11.1) and DynamoDB over `url-connection-client` (§12.7); FoundationDB has **no
+HTTP API at all**. `org.foundationdb:fdb-java` is the only client, and it is a JNI shim over the
+native `libfdb_c`.
+
+What it does and does not cost:
+
+- the jar has **no transitive dependencies whatsoever** — one jar, nothing like the
+  grpc-netty/protobuf/guava stack §11.1 refused or even the 28 jars of §12.7. It is a dependency
+  of *this backend module only*; `core` and `server` are untouched, which is the whole point of
+  the module split of §6;
+- it needs **`libfdb_c`, which is not in the jar** (the jar carries only the JNI shim, per
+  platform). A deployment installs the FoundationDB client package the ordinary way and
+  version-matches it to the cluster; the tests, which cannot assume anything is installed, find
+  or fetch it themselves (§13.7);
+- `FDB.selectAPIVersion` may be called **only once per JVM** and starts one network thread for
+  the whole process. `FoundationDbKeyValueStore` therefore selects it through a holder that
+  refuses a second, different version with a message that says so, rather than letting the
+  driver's own error surface. Opening a database is nearly free (16 handles in 0.3 ms in the
+  spike), so each store owns and closes its own — which keeps the lifecycle with
+  `KeyValueStores.close()` and the factory holding nothing until `create` is called.
+
+A **native image** is explicitly not a condition of this backend: the decision recorded in
+`.todo/022` is that a native image is best effort per backend, and this one would need JNI
+configuration plus a 24 MB library on top. `.todo/014` carries the note.
+
+### 13.6 Every transaction is bounded, because the default is to hang
+
+Two failure modes here are unbounded by default, and the spike hit both:
+
+- **a transaction may live five seconds**, after which it fails `1007 transaction_too_old` —
+  which is *retryable*, so `Database.run()` retries a body that is always too slow **for ever**.
+  The spike hung on exactly this and had to be killed;
+- **a read against a cluster that is not there never fails.** It waits, indefinitely, unless the
+  transaction has a timeout.
+
+So every transaction this store opens sets a **timeout** and a **retry limit** before it does
+anything else. Both are persisted across FoundationDB's own retry reset, which is what makes them
+bound `run()` rather than each attempt within it; measured, an unreachable cluster with a
+one-second timeout fails in 1001 ms with `1031`. `checkHealth()` is the same bounded read, so the
+health indicator task 017 describes has something to be built on from the start.
+
+Error mapping, measured rather than assumed:
+
+| FoundationDB | Mapped to | Why |
+|---|---|---|
+| `2101` transaction too large, `2102` key too large, `2103` value too large | `ValueTooLargeException` | The application has to store less, and no retry can change that. The command layer answers `ERR value too large for the backend` rather than `ERR internal error`. Sizes are also checked *before* a write is sent, so the message names what did not fit |
+| `1007`, `1020` and everything else FoundationDB marks retryable | retried by `run()`, within the timeout and retry limit | ordinary conflict |
+| anything else, including `1031` timeout | `FoundationDbException` | unreachable, refused, or out of attempts |
+
+### 13.7 How it is proved
+
+Everything runs against a real FoundationDB in a container (`foundationdb/foundationdb:7.3.63`,
+pinned, client `org.foundationdb:fdb-java:7.3.63` — the same minor version, because a mixed pair
+is untested here and is `.todo/022`'s named follow-up). Two things about that are not the usual
+Testcontainers shape, and both are the store's nature rather than incidental:
+
+- **the ports have to match.** A FoundationDB client asserts that the port it reached is the port
+  the server advertises, so Testcontainers' "expose a port, read the random mapped one" makes the
+  client print `Assertion pkt.canonicalRemotePort == peerAddress.port failed` and time out. The
+  fixture picks a free host port and binds it *to itself* (`FDB_NETWORKING_MODE=host`,
+  `FDB_PORT=P`, an exact `PortBinding`), which is parallel-safe because P is chosen at run time;
+- **`libfdb_c` is found or fetched by the tests**, per platform, cached outside `target/` and
+  `System.load`ed from a static initializer. On Linux the release publishes a bare `.so` with a
+  `.sha256` beside it; on macOS it is only inside a `.pkg`, which `xar` and `tar` — both present
+  on macOS — unpack. An already-installed `/usr/local/lib/libfdb_c.dylib` is preferred. Loading
+  the absolute path before anything touches the `FDB` class is enough on both platforms: the
+  dynamic loader then satisfies the JNI shim's own `@rpath` reference from what is already in the
+  process, so no test needs an environment variable and surefire needs no configuration.
+
+| Suite | What only a real FoundationDB can say |
+|---|---|
+| `FoundationDbKeyValueStoreTest` | the SPI contract, the deadline index and passive expiry, the silence of a rename and of an emptied set, two stores as two replicas, concurrent writers to one bucket |
+| `FoundationDbLogTest` | the log in commit order exactly once across replicas; a cursor left behind by a trim notices and resyncs rather than replaying or hanging |
+| `FoundationDbLimitsTest` | the three ceilings and that each is refused as `ValueTooLargeException` with nothing written; a transaction bounded by its timeout against an unreachable cluster |
+| `FoundationDbBackendEndToEndTests` (server) | stock Spring Session over Lettuce in indexed mode: a session left to expire reaching `SessionExpiredEvent` through the sweeper and the log, and a session another adapter removed reaching this one's subscriber |
+
+### 13.8 What it costs (measured 2026-07-26)
+
+Correctness was proved first and the cost measured afterwards, by the same harness and the same
+shared cases as etcd's and DynamoDB's (`./mvnw test -Pperformance`), so the three can be read side
+by side. Each server module writes to its own `target/performance/`. Four numbers from it belong
+in the design, because they are the design's own consequences rather than one machine's:
+
+- **One write is one commit, and one read is none.** Measured over a hundred of each against a
+  single-member container: `HSET` a new session 1.06, `HSET` one field 1.06, `APPEND` 1.05,
+  `SADD` 1.05, `DEL` 1.06, `RENAME` 1.06 — and `HGETALL`, `EXISTS`, `PTTL` at 0.05 or below,
+  because a read-only transaction commits for nothing. (The 0.05 excess is the counter's own
+  sampling boundary, §13.7.) So the unit to plan in is *commits*, against six raft writes per
+  save on etcd (§11.6) and about eight billed requests on DynamoDB (§12.7).
+- **The layout shows up as writes, not commits.** The same run: `HSET` of a new four-field
+  session is 10 keys written in that one commit and `HSET` of one field is 1; `RENAME` is 12.
+  That is what one key per field buys — a session save writes what changed, not the session.
+- **Contention does not conflict.** 4, 16, 64 and 256 threads adding to one expirations bucket
+  lost nothing and cost **0.15 to 0.20 conflicts per write**, with commits staying at ~1.02 per
+  write as the concurrency rose. Every ordinary operation measured 0.000. This is §13.1's claim
+  and the whole reason for the per-member layout: the case §11.4 records etcd losing 19% of, and
+  which `KeyQueues` had to be built for, does not arise.
+- **The standing charge is one watch, not a poll.** An idle replica holds one watch per database
+  and wakes only when something is removed. §12.5's polled log is billed per interval; this one
+  costs nothing while nothing happens. The sweeper's interval is the only recurring work, and it
+  falls on the one elected holder.
+
+Absolute times are one laptop's, but the shape is the design's: a write is about 5 ms against a
+read's 1 ms on a single-member memory-engine container, and `SADD` into a bucket of 10,000 costs
+what `SADD` into a bucket of 1 costs — where etcd's grows fivefold (§11.7).
+
+One thing the harness could not do straightforwardly, recorded because it looks like a bug
+otherwise: **FoundationDB's own counters are a periodic snapshot**, cumulative and eventually
+exact but seconds behind. A count taken the moment an operation returns reads the sample from
+before it. So every count waits for the snapshot to stop moving, and each operation is counted
+over a run of a hundred rather than once — a single operation falls inside one sampling window
+and cannot be told from its neighbours. A window that moved on neither side of a run is reported
+as such rather than as a row of zeros, since "cost nothing" is the most misleading thing a
+counter can say.
+
+### 13.9 What is deliberately not there
+
+- **No `KeyQueues`.** The etcd backend needs it because compare-and-swap on one key does not
+  degrade (§11.4); here the per-member layout means the contended case does not conflict, and
+  what is left is FoundationDB's own retry, which the spike measured degrading gracefully. Adding
+  serialization would buy exact `SADD`/`HSET` counts across replicas — the same trade §12.1
+  declines — at the cost of the throughput the layout was chosen for.
+- **No multi-version client.** The spike only ever ran 7.3.63 against 7.3.63; whether a client of
+  one minor version talks to a cluster of another, and whether configuring the multi-version
+  client is worth it, is `.todo/022`'s named follow-up rather than something guessed at here.
+- **No `examples/session-example-foundationdb`.** The example applications run two adapter
+  instances against one store, and the port-identity constraint of §13.7 is a test fixture rather
+  than something to put in front of a reader as the way to run FoundationDB. The end-to-end
+  proof is `FoundationDbBackendEndToEndTests`.

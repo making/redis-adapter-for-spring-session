@@ -82,15 +82,25 @@ research; if you need them again, unzip
   The TTL a lease renews to travels in the value, which raised the envelope's format byte to 2
   — nothing has been released, so format 1 is refused rather than still read. The two
   remaining ideas of §11.7 are unaffected.
-- **022** and **023** are two candidate backends, each spiked against the real store on
-  2026-07-26 and neither started. They are independent of each other and of everything above,
-  and both are ordinary applications of "Adding a new KVS" — nothing in `core` or `server`
-  changes for either. They fail in opposite places, which is why both files exist: FoundationDB
-  has real multi-key transactions and no TTL at all, Cassandra has a native TTL and a native
-  lease but no push of any kind, so both end up needing a polled event log and a sweeper.
-  **023 carries one decision that must be taken before its store is written** (the layout, and
-  with it what to do about Cassandra's own tombstones), where **022**'s remaining decision is
-  only how to fit a value into 100,000 bytes.
+- **022 is built** (2026-07-26): `redis-adapter-for-spring-session-foundationdb` and its
+  server, an ordinary application of "Adding a new KVS" with nothing in `core` or `server`
+  changed. `.docs/design/architecture.md` §13 is the design. The open decision it carried — how
+  to fit a value into 100,000 bytes — was settled as **one key per hash field and per collection
+  member**, which turned out to pay for itself twice over: a range read makes it free, and
+  writers on one expirations bucket then write different keys and measured **0.000 conflicts**,
+  so the contention machinery §11.4 needed for etcd does not exist here. Real multi-key
+  transactions also removed tombstones and the del-versus-expired guesswork outright. What it
+  cost instead is the two absences the spike predicted: no TTL, so expiry is entirely the
+  adapter's (a deadline index and an elected sweeper), and no range watch, so events travel
+  through a versionstamped log — which, unlike 024's, has no cursor lag and no clock hazard. It
+  is also the only backend with a prerequisite outside the jar: the native `libfdb_c`, which its
+  tests fetch and 014 has to put in the image.
+- **023** is a candidate backend, spiked against the real store on 2026-07-26 and not started.
+  It is independent of everything above and an ordinary application of "Adding a new KVS".
+  Cassandra fails where FoundationDB does not and vice versa: it has a native TTL and a native
+  lease but no push of any kind, so it needs a polled event log and no sweeper where 022 needed
+  a sweeper and no poll. **It carries one decision that must be taken before its store is
+  written** — the layout, and with it what to do about Cassandra's own tombstones.
 - **024** is the third candidate, spiked twice on 2026-07-26 and not started, independent of 022
   and 023 and of everything above. **The target is real DynamoDB** (decided 2026-07-26), and it
   is the best of the three: a session save is one `TransactWriteItems` costing what a single
@@ -146,6 +156,6 @@ research; if you need them again, unzip
 | 019 | Cut the raft writes a session save costs | done |
 | 020 | A contended key must not fail a session save | done |
 | 021 | A write etcd is too small for deserves its own error | not started |
-| 022 | A FoundationDB backend | spiked, ready to build |
+| 022 | A FoundationDB backend | done |
 | 023 | A Cassandra backend | spiked, one decision short of ready |
 | 024 | A DynamoDB backend | spiked, two decisions short of ready |

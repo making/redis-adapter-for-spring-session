@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>am.ik.redis</groupId>
+		<artifactId>redis-adapter-for-spring-session</artifactId>
+		<version>0.1.0-SNAPSHOT</version>
+	</parent>
+
+	<artifactId>redis-adapter-for-spring-session-foundationdb</artifactId>
+	<name>redis-adapter-for-spring-session-foundationdb</name>
+	<description>FoundationDB backend of the Redis adapter for Spring Session</description>
+
+	<dependencies>
+		<dependency>
+			<groupId>am.ik.redis</groupId>
+			<artifactId>redis-adapter-for-spring-session-core</artifactId>
+			<version>${project.version}</version>
+		</dependency>
+		<!-- The only way to reach FoundationDB: it serves no HTTP API at all, so unlike etcd
+		     there is nothing to choose here. What that buys is the smallest driver in this
+		     repository - one jar with no transitive dependencies whatsoever - and what it costs
+		     is JNI: the jar carries the shim, and the native libfdb_c it links against is
+		     installed beside the deployment and fetched by the tests
+		     (.docs/design/architecture.md §13.5). -->
+		<dependency>
+			<groupId>org.foundationdb</groupId>
+			<artifactId>fdb-java</artifactId>
+			<version>${foundationdb.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.jspecify</groupId>
+			<artifactId>jspecify</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-api</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-engine</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>testcontainers-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-simple</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>am.ik.maven</groupId>
+				<artifactId>nullability-maven-plugin</artifactId>
+				<extensions>true</extensions>
+			</plugin>
+			<plugin>
+				<groupId>io.spring.javaformat</groupId>
+				<artifactId>spring-javaformat-maven-plugin</artifactId>
+			</plugin>
+			<!-- The two fixtures here are published so that the server module built on this
+			     backend uses them rather than a copy. Every other backend's fixture is a
+			     container declaration a few lines long and is simply written twice; this
+			     one finds or fetches a native library and binds a container port to itself,
+			     and two copies of that would drift. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
+				<executions>
+					<execution>
+						<goals>
+							<goal>test-jar</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<systemPropertyVariables>
+						<!-- Which FoundationDB the fixtures run, and which libfdb_c they look for.
+						     It is the client jar's version by construction: a mixed pair is
+						     untested here (.docs/design/architecture.md §13.7). -->
+						<foundationdb.version>${foundationdb.version}</foundationdb.version>
+					</systemPropertyVariables>
+					<!-- fdb-java loads its JNI shim, and the tests load libfdb_c by absolute path
+					     before anything touches the FDB class. Without this the JDK warns on every
+					     run and will refuse outright in a later release. -->
+					<argLine>--enable-native-access=ALL-UNNAMED</argLine>
+				</configuration>
+			</plugin>
+		</plugins>
+	</build>
+</project>

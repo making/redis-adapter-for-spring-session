@@ -89,10 +89,23 @@ can still configure everything through environment variables in either image.
 - **A native image is best effort, per backend** (decided 2026-07-26). The JVM container
   image is the baseline every backend has to reach; a native image is a bonus for whichever
   ones it happens to work for. A backend nobody has managed to build one for is still a
-  supported backend, and this task is not a gate on adding one. The FoundationDB backend of
-  task 022 is the first that would make this bite: it needs JNI configuration for
-  `org.foundationdb:fdb-java` and a 24 MB `libfdb_c` inside the image, and if that turns
-  out not to be worth it, say so and move on rather than holding the backend back.
+  supported backend, and this task is not a gate on adding one.
+- **The FoundationDB backend (server-foundationdb, built 2026-07-26) is the one that makes
+  the rule above bite, and it has a JVM-image requirement no other backend has.** It is
+  reached through JNI and nothing else — FoundationDB serves no HTTP API — so:
+  - **the JVM image has to carry `libfdb_c`**, version-matched to the cluster (23.9 MB on
+    Linux; the release publishes a bare `libfdb_c.<arch>.so` with a `.sha256` beside it, so
+    the Dockerfile is a download and a copy, not a package install). Without it the server
+    starts and then fails every operation with a link error. This is a condition of that
+    backend's image, not a nicety, and it is the only backend here with a prerequisite
+    outside the jar;
+  - `--enable-native-access=ALL-UNNAMED` belongs on the JVM image's command line. The tests
+    already pass it (both FoundationDB modules' surefire configuration); without it the JDK
+    warns on every run and will refuse outright in a later release;
+  - a **native** image would need JNI configuration for `org.foundationdb:fdb-java` on top
+    of that library. It is explicitly not a condition of the backend — `.docs/design/
+    architecture.md` §13.5 records the decision — so if it turns out not to be worth it, say
+    so and move on rather than holding the backend back.
 - **The DynamoDB backend (server-dynamodb, built 2026-07-26) needs reachability metadata
   for the AWS SDK** — the SDK reflects over its service model, and Spring Cloud AWS's
   auto-configuration adds its own share. Both publish GraalVM hints (the SDK through the
