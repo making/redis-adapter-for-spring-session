@@ -190,6 +190,13 @@ Multi-module Maven (parent = current artifact, packaging `pom`):
   JDK's `HttpClient`, so no gRPC stack, protobuf or Netty reaches the server. Test deps add
   Testcontainers, because the backend is only worth anything if it works against a real
   etcd.
+- **`redis-adapter-for-spring-session-dynamodb`** — the DynamoDB backend (§12), added
+  2026-07-26. Depends on `core` and — the first backend to carry a driver — on
+  `software.amazon.awssdk:dynamodb` over `url-connection-client`, with the SDK's Netty and
+  Apache HTTP clients excluded (§12.7). The store is handed a built `DynamoDbClient` rather
+  than building one, so where DynamoDB is and how it is signed for stays the caller's
+  business. Test deps add Testcontainers and the Floci emulator, with the honesty caveat of
+  §12.6.
 - **`redis-adapter-for-spring-session-server`** — everything the Spring Boot server is
   **except** a backend: `RedisAdapterProperties` (bind address, port, optional auth, DB
   count, TLS), `RedisAdapterServerAutoConfiguration` registered through
@@ -211,7 +218,8 @@ Multi-module Maven (parent = current artifact, packaging `pom`):
   backend, one module per store: `<Backend>BackendProperties`,
   `<Backend>KeyValueStoreFactory`, `<Backend>BackendConfiguration` and a
   `@SpringBootApplication`, in `am.ik.redis.adapter.boot.<backend>`, producing the `exec`
-  jar. `-server-inmemory` and `-server-etcd` are the two here. The Spring side of a backend
+  jar. `-server-inmemory`, `-server-etcd` and `-server-dynamodb` are the three here. The
+  Spring side of a backend
   lives with the server rather than with the store because `KeyValueStoreFactory` is a
   Spring concept and the store module has no Spring on it.
 
@@ -592,3 +600,185 @@ because they are the design's own consequences rather than one machine's:
 - **Clocks.** Deadlines are absolute milliseconds on the *adapter's* clock, so replicas
   need their clocks roughly in step, which an etcd cluster needs anyway. Skew shows up as a
   key expiring that much early or late, never as a lost session.
+
+## 12. The DynamoDB backend (2026-07-26)
+
+`redis-adapter-for-spring-session-dynamodb` keeps the sessions in one DynamoDB table. It
+is the second shared backend, chosen over FoundationDB and Cassandra on the spike recorded
+in `.todo/024-dynamodb-backend.md`, whose two headline findings shape everything here: a
+`TransactWriteItems` costs what one write costs, and a removal and its announcement can be
+written together, atomically. The target is real DynamoDB; the local test store is an
+emulator, and §12.6 is honest about what that does not prove.
+
+### 12.1 The layout: one item per member, a meta item per key
+
+One table serves every database. Items live under a string partition key and sort key;
+Redis keys, hash fields and members are raw bytes, so they travel base64url-encoded in the
+item keys and are never decoded into anything.
+
+| Item | `pk` | `sk` | Attributes |
+|---|---|---|---|
+| Meta, one per Redis key | `k/<db>/<b64 key>` | `@` | `t` (string/hash/set/zset), `v` (the string payload), `exp` (deadline, epoch ms; absent = no expiry), `ver` (incarnation counter), `ttl` (the storage backstop, §12.3), `duePk`/`dueAt` (the deadline index, §12.4) |
+| Hash field | the meta's `pk` | `f/<b64 field>` | `v` |
+| Set member | `k/<db>/<b64 key>/<shard>` | `m/<b64 member>` | — |
+| Sorted-set member | `k/<db>/<b64 key>/<shard>` | `z/<b64 member>` | `score` |
+| Key event | `e/<db>/<bucket second>` | `<epoch ms>/<uuid>` | `key` (raw bytes), `reason` (`del`/`expired`), `ttl` |
+| Sweeper lease | `s/<db>` | `@` | `holder`, `leaseUntil` |
+
+The `pk` carries the database index, so databases are independent keyspaces in one table
+and the factory holds nothing until `create` is called. Every attribute is referenced
+through `ExpressionAttributeNames`, always — `ttl` and `key` are reserved words, and a
+list nobody rechecks is how the next reserved word gets through.
+
+**A collection is one item per member**, never a blob: the 400 KB item ceiling caps a blob
+set at roughly 20,000 members, and — the measured half of the reason — per-item members
+made `SADD` flat from an empty set to 50,000 members with nothing lost at 256 concurrent
+writers, which is the case §11.4 records etcd losing 19% of before batching. Hash fields
+sit in the meta item's own partition, so reading a session is **one `Query`**; a session
+hash never approaches a partition's write ceiling. Set and sorted-set members are
+**sharded across `shards` partitions** by member hash, because Spring Session has one
+genuinely hot key — every session expiring in the same minute joins that minute's set —
+and 1,000 writes per second per partition is a service quota no capacity setting lifts.
+Reads of a set fan out over the shards; the shard count is fixed for the life of a table,
+because moving it strands members where the old hash put them.
+
+**Writes are transactions, guarded at the meta item.** A mutation that creates a key puts
+the meta conditioned on it not existing; one that grows an existing collection carries a
+`ConditionCheck` that the meta is still there, still that type and not past its deadline —
+deliberately *not* a version compare, so two replicas adding different members to the same
+bucket do not conflict at all, which is what the spike's 256-writer result depends on. The
+few operations that genuinely read-modify-write one attribute (`APPEND`) or must not act
+on a key that was replaced underneath them (`DEL`) compare and bump `ver`. Inside one
+adapter, callers of one key are serialized (`KeyLocks`, the exclusive half of §11.4's
+answer — there is nothing to batch here, because members are items); so the counts `SADD`
+and `HSET` return are exact within one adapter and approximate across replicas, which is
+the trade `.todo/024` §"the count question" prices at 6.5x and this design declines to pay.
+A transaction takes at most 100 items and a batch 25, so a wider mutation is split — and a
+split write is no longer atomic, which is a stated consequence, not a surprise.
+
+An emptied set removes its key (a separate, `ver`-guarded delete after the members go,
+announcing nothing). Across replicas that delete can race a concurrent add and strand the
+new member invisibly; within Spring Session the only set that empties is an expirations
+bucket whose minute has passed, so the stranded entry is one the cleanup job would have
+thrown away. Stray children — that race, or a crash between a meta removal and its
+children's — are unreadable (every read starts at the meta) and are purged when the key is
+next created.
+
+### 12.2 Removal and its announcement are one transaction
+
+`delete`, passive expiry and the sweeper all remove a key the same way: **one
+`TransactWriteItems` deletes the meta (guarded on `ver`) and puts the key-event log entry,
+with the reason — `del` or `expired` — written as a field.** The two cannot part company,
+so the `del`-versus-`expired` guesswork of §11.3 does not exist here, and neither do
+tombstones: a removal that must announce nothing (a rename's source, an emptied set)
+simply writes no log entry. Children are deleted after the meta, in batches; they are
+already unreadable the moment the meta goes.
+
+`RENAME` moves the children, then moves the meta in one transaction (put destination,
+delete source), then deletes the source's children. No log entry anywhere, and a stale
+destination is passively expired first so its death is announced, as in §11.3.
+
+### 12.3 Expiry is the adapter's; DynamoDB's TTL is a garbage collector
+
+AWS deletes a TTL-expired item *within 48 hours, best effort*, while the Floci emulator
+collects about a second after the deadline — a backend that trusted the emulator would
+look correct locally and leak every abandoned session in production. So, exactly as the
+deadline-in-the-value of §11.2:
+
+- the **`exp` attribute on the meta item** is the expiry, exact to the millisecond, and
+  every read compares against it. A read that finds an overdue key removes it through
+  §12.2, which is what announces it;
+- the **sweeper** (§12.4) is what announces the keys nobody touches;
+- the **`ttl` attribute** is written only so that storage for a key no sweeper ever
+  reaches is eventually reclaimed. It is the deadline rounded up plus a five-minute
+  margin, so nothing is reclaimed before it is due and no emulator's prompt reaper can
+  beat the sweeper to a live announcement. It exists on meta and log items only — a child
+  item's `ttl` could not follow the deadline that `PEXPIREAT` moves — and **it must never
+  be what fires `onExpired`**; a test holds that line, because the environment the tests
+  run in will not.
+
+`PEXPIREAT` is one conditional `UpdateItem` of the meta — no read first, since the new
+deadline does not depend on the old — which is the "deadline folded into the write" price
+the spike measured, and the reason a session save here is round trips rather than raft
+writes.
+
+### 12.4 The sweeper, its lease, and the deadline index
+
+Meta items with a deadline carry `duePk`/`dueAt`, a sparse GSI keyed by
+`d/<db>/<key-hash shard>` and the deadline — sharded like the members, and for the same
+1,000-writes-per-partition reason, since every save writes it. GSI reads are eventually
+consistent, always; the index only *nominates* candidates, and every removal re-reads the
+meta strongly consistently and is guarded on it, so a stale index entry costs a wasted
+read, never a wrong event.
+
+One replica sweeps per database: a **lease taken with one conditional `PutItem`**
+(`s/<db>`, taken when absent or lapsed — the spike's 16-racer result), renewed while the
+holder lives, released on close. The holder queries each due shard for overdue metas,
+removes each through §12.2 with reason `expired`, and trims the event log behind the
+cursor lag. A replica that loses the lease simply polls on; a dead holder's lease lapses
+and a live replica takes it.
+
+### 12.5 Key events: a polled log, because Streams cannot be one
+
+Every removal that announces writes its log entry in the removal's own transaction
+(§12.2), bucketed by second. Each store polls its database's buckets and fires listeners
+from what it reads — its own removals included, so every replica hears every event in the
+same order, which is §11.3's watch with the watch replaced by a poll. DynamoDB Streams was
+measured and rejected: at most two readers per shard is a hard quota the third adapter
+replica breaks, and a correct reader needs the Kinesis Client Library, which is a
+dependency stack this backend exists to avoid. The poll is the one place this backend is
+worse than etcd, and it has two sharp edges, both from the spike:
+
+- **the cursor lags wall-clock** (`cursor-lag`, default 500 ms) and de-duplicates, because
+  an entry stamped behind a cursor that has already passed is never seen — the clock
+  hazard `.todo/023` found first. The lag must exceed the fleet's clock skew plus a write's
+  latency; events therefore arrive roughly `cursor-lag` plus half a `poll-interval` after
+  the removal, and both are properties;
+- **an idle poll is billed.** The poll interval is a price, not just a latency knob: one
+  replica polling strongly consistently every 100 ms is ~0.9 M reads a day, about $3.30
+  per replica-database per month against us-east-1 on-demand while nothing happens at all.
+  The reads are strongly consistent, because an eventually consistent read that misses an
+  entry the cursor then passes is a lost event, and halving that bill is not worth one.
+
+### 12.6 The store under the tests is a fake, and where it parts from the real thing
+
+`CLAUDE.md` promises a networked store is proven against the real thing; AWS publishes no
+DynamoDB you can run, so this backend cannot keep that promise and says so instead. The
+ordinary build runs everything against **Floci** (`floci/floci`, pinned, through
+`io.floci:testcontainers-floci`), which the spike found faithful to every documented limit
+it probed — the 400 KB item, the 100-item transaction, the 25-item batch, the refusal of
+two operations on one item, reserved words, all-or-nothing cancellation of a failed
+*condition*. One place it parts company was found while building, not spiking: a
+transaction holding one **oversized** item fails as a plain refusal but Floci still
+applies the other puts, where AWS cancels them all. The store therefore decides the size
+failure itself, before anything is sent (`requireFits`, raising the SPI's
+`ValueTooLargeException`), so its behaviour is the same over the fake and the real thing
+— and the server-side mapping stays as the backstop. Four things Floci cannot prove, each
+handled by construction and named here so the gap stays a fact rather than becoming an
+assumption: TTL timing (§12.3 never depends on it), TTL stream records
+(moot — no Streams), throttling (`ProvisionedThroughputExceededException` never occurs
+locally; its retry path is exercised against injected failures), and anything about real
+throughput or cost. An **opt-in suite against a real table** (`RealDynamoDbTests`, run by
+naming a table and region in system properties, skipped otherwise) exists to cover exactly
+those; kumo (`ghcr.io/sivchari/kumo`) is the second-opinion emulator, opt-in the same way,
+and never the primary — `.todo/024` records the three checks it is missing.
+
+### 12.7 The SDK, and what a session costs
+
+The one driver dependency any backend here carries: `software.amazon.awssdk:dynamodb`
+with `netty-nio-client` and `apache5-client` **excluded** and `url-connection-client` used
+instead — 28 jars and 6.9 MB instead of 42 and 13, no Netty, no Jackson, no Guava, over
+`HttpURLConnection` in the same spirit as §11.1. The exclusions are not optional. The
+store is handed its `DynamoDbClient` and does not close it; every request it sends carries
+its own `apiCallTimeout`, so how long a Redis command can hang is the store's choice
+rather than an inherited default.
+
+What a session costs is round trips and money, not raft writes. Locally against the
+emulator a call is ~2 ms whatever it is; an indexed-mode save is about eight calls (one
+`Query` and one transaction for the hash, one conditional update per `PEXPIREAT`, a read
+and a transaction for the bucket `SADD`, two for the shadow key), so the calls-per-
+operation column of the performance report is the number to watch — it is also the bill.
+Two facts belong in `README.md` because only an operator can weigh them: a transactional
+write is billed at **2x** a plain one (the price of §12.2's atomicity), and the poll and
+sweep intervals are standing charges (§12.5) that scale with replicas × databases, not
+with traffic.

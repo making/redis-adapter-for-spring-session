@@ -93,3 +93,10 @@ can still configure everything through environment variables in either image.
   task 022 is the first that would make this bite: it needs JNI configuration for
   `org.foundationdb:fdb-java` and a 24 MB `libfdb_c` inside the image, and if that turns
   out not to be worth it, say so and move on rather than holding the backend back.
+- **The DynamoDB backend (server-dynamodb, built 2026-07-26) needs reachability metadata
+  for the AWS SDK** — the SDK reflects over its service model, and Spring Cloud AWS's
+  auto-configuration adds its own share. Both publish GraalVM hints (the SDK through the
+  reachability-metadata repository, Spring Cloud AWS through its native support), so this
+  is expected to be wiring rather than research; it runs over `url-connection-client`, so
+  no Netty reaches the image. Best effort per the decision above — the JVM image is the
+  baseline.

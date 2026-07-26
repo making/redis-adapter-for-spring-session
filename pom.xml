@@ -15,9 +15,11 @@
 		<module>redis-adapter-for-spring-session-core</module>
 		<module>redis-adapter-for-spring-session-inmemory</module>
 		<module>redis-adapter-for-spring-session-etcd</module>
+		<module>redis-adapter-for-spring-session-dynamodb</module>
 		<module>redis-adapter-for-spring-session-server</module>
 		<module>redis-adapter-for-spring-session-server-inmemory</module>
 		<module>redis-adapter-for-spring-session-server-etcd</module>
+		<module>redis-adapter-for-spring-session-server-dynamodb</module>
 	</modules>
 
 	<properties>
@@ -28,6 +30,12 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<spring-boot.version>4.1.0</spring-boot.version>
 		<archunit.version>1.4.1</archunit.version>
+		<!-- The AWS SDK the DynamoDB backend speaks with. Pinned here rather than left to
+		     spring-cloud-aws so that the store module (which has no Spring) and the server
+		     module built around it resolve the same SDK. -->
+		<awssdk.version>2.49.3</awssdk.version>
+		<spring-cloud-aws.version>4.1.0</spring-cloud-aws.version>
+		<testcontainers-floci.version>2.12.0</testcontainers-floci.version>
 		<!-- The performance harness measures a backend rather than asserting anything about it,
 		     so it is not part of an ordinary build: it takes minutes and its numbers are only
 		     meaningful when nothing else is running. The "performance" profile is what runs it. -->
@@ -74,6 +82,13 @@
 				<groupId>com.tngtech.archunit</groupId>
 				<artifactId>archunit-junit5</artifactId>
 				<version>${archunit.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>software.amazon.awssdk</groupId>
+				<artifactId>bom</artifactId>
+				<version>${awssdk.version}</version>
+				<type>pom</type>
+				<scope>import</scope>
 			</dependency>
 		</dependencies>
 	</dependencyManagement>

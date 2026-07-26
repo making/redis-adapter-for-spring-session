@@ -19,9 +19,9 @@ and configures everything with properties. Only the connection target changes.
                                              KeyValueStore  |  (one SPI)
                                                             v
                                               +---------------------------+
-                                              | in memory, etcd, or a     |
-                                              | store you build a server  |
-                                              | around                    |
+                                              | in memory, etcd, DynamoDB,|
+                                              | or a store you build a    |
+                                              | server around             |
                                               +---------------------------+
 ```
 
@@ -61,8 +61,9 @@ Two things are worth knowing before you start:
   sessions in the adapter process, so they are gone when it restarts and are not shared with a
   second adapter; that is the development and single-instance server, and it runs with no
   configuration at all. Running several adapters in front of the same sessions needs a store that
-  is itself shared: [etcd](#etcd) is published, and anything else is a server you assemble, which
-  is [three small classes](#writing-a-backend) and no fork of this project.
+  is itself shared: [etcd](#etcd) and [DynamoDB](#dynamodb) are published, and anything else is a
+  server you assemble, which is [three small classes](#writing-a-backend) and no fork of this
+  project.
 - **The adapter itself holds no session state.** Everything it is asked to remember goes to the
   backend, so replicas scale as far as the backend does.
 
@@ -273,9 +274,9 @@ The server side of the same connection is [below](#tls-1).
 java -jar redis-adapter-for-spring-session-server-<backend>-<version>-exec.jar
 ```
 
-Which store the sessions land in is which jar this is; the published ones are `inmemory` and
-`etcd`, and they are listed under [Backends](#backends). Everything else on this page is the same
-whichever one you run.
+Which store the sessions land in is which jar this is; the published ones are `inmemory`, `etcd`
+and `dynamodb`, and they are listed under [Backends](#backends). Everything else on this page is
+the same whichever one you run.
 
 ### Configuration reference
 
@@ -361,12 +362,12 @@ The adapter keeps no session state, so replicas behind a load balancer serve the
 but only as far as the backend does. The in-memory server does not, since each replica owns its
 own map. Scaling out means a server built around a store that is shared, and one that can tell a
 replica about a key another replica expired, because that is what an application's
-`SessionExpiredEvent` is made of. [etcd](#etcd) does both.
+`SessionExpiredEvent` is made of. [etcd](#etcd) and [DynamoDB](#dynamodb) do both.
 
 ## Backends
 
 Each store gets a server of its own, `redis-adapter-for-spring-session-server-<backend>`, and the
-jar you run is the whole of the choice — there is no property to set and nothing to select. Two
+jar you run is the whole of the choice — there is no property to set and nothing to select. Three
 are published, and nothing about the application changes between them. A store this project does
 not ship gets a server of your own; see [Writing a backend](#writing-a-backend).
 
@@ -470,6 +471,85 @@ you can take your own.
   against 15 without it). What still grows is the bucket itself: adding to a minute that already
   holds 10,000 sessions costs about five times what an empty one does, however few writers there
   are.
+
+### DynamoDB
+
+`redis-adapter-for-spring-session-server-dynamodb`. Sessions live in one DynamoDB table, so they
+are shared by every adapter pointed at it and outlive all of them — with nothing of your own to
+operate underneath: no cluster, no compaction, no upgrades. The table is created when it is absent
+(on-demand billing), so on AWS the server runs with no configuration beyond a region.
+
+Where DynamoDB is and how requests are signed are [Spring Cloud
+AWS](https://awspring.io/)'s ordinary `spring.cloud.aws.*` properties — the default credential
+provider chain, a static access key, or an endpoint override that points a local run at an
+emulator. The backend adds only its own tuning:
+
+<!-- properties:redis-adapter.dynamodb -->
+
+| Property | Default | What it does |
+| --- | --- | --- |
+| `redis-adapter.dynamodb.table-name` | `redis-adapter` | The table the sessions live in, created when absent unless `create-table` says otherwise. |
+| `redis-adapter.dynamodb.create-table` | `true` | Whether to create the table (and its index and TTL setting) when it is absent. Off for deployments whose tables are provisioned elsewhere. |
+| `redis-adapter.dynamodb.shards` | `4` | How many partitions a set's members and the deadline index spread over. DynamoDB caps one partition at 1,000 writes/s, and every session expiring in the same minute joins one bucket, so this is that bucket's ceiling in thousands of writes per second. Fixed for the life of a table. |
+| `redis-adapter.dynamodb.poll-interval` | `100ms` | How often the key-event log is polled. Half of how long a session event takes to arrive — and a standing charge, because an idle poll is a billed read. |
+| `redis-adapter.dynamodb.cursor-lag` | `500ms` | How far the log cursor stays behind wall-clock. It must outlast the replicas' clock skew plus a write's latency, or a late-stamped event is lost; it is the other half of an event's arrival time. |
+| `redis-adapter.dynamodb.sweep-interval` | `1s` | How long between sweeps for sessions nobody comes back to, which is the longest an abandoned session can sit unannounced. |
+| `redis-adapter.dynamodb.log-retention` | `60s` | How long read key-event log entries are kept before the sweeper trims them. Must comfortably outlast `cursor-lag`. |
+| `redis-adapter.dynamodb.request-timeout` | `5s` | How long to wait for DynamoDB to answer one request, which bounds how long a Redis command can hang. |
+| `redis-adapter.dynamodb.max-attempts` | `10` | How many times an operation retries a key that changed underneath it, or a request DynamoDB throttled, before giving up. |
+
+<!-- snippet:server-dynamodb -->
+```properties
+spring.cloud.aws.region.static=ap-northeast-1
+redis-adapter.dynamodb.table-name=redis-adapter
+redis-adapter.dynamodb.shards=4
+```
+
+The same as environment variables:
+
+<!-- snippet:server-dynamodb-env -->
+```properties
+SPRING_CLOUD_AWS_REGION_STATIC=ap-northeast-1
+REDIS_ADAPTER_DYNAMODB_TABLE_NAME=redis-adapter
+REDIS_ADAPTER_DYNAMODB_SHARDS=4
+```
+
+Three things are worth knowing:
+
+- **Expiry is the adapter's, not DynamoDB's.** AWS's own TTL deletes an expired item within 48
+  hours, best effort, which is useless for announcing a session's death. The exact deadline lives
+  on the item and every read honours it; a sweeper — one replica per database, elected by a lease —
+  removes and announces the sessions nobody comes back to, and DynamoDB's TTL is written only so
+  that storage a sweeper never reached is eventually reclaimed.
+- **Events cross the adapters through a log the removal writes atomically.** A removal and its
+  announcement are one transaction, so they cannot part company, and every adapter polls the log —
+  which is what carries a `SessionExpiredEvent` to an application connected to a different replica.
+  How fast is `poll-interval` plus `cursor-lag`, about 0.6 s with the defaults.
+- **IAM.** The adapter needs the item operations on its table and index (`GetItem`, `Query`,
+  `PutItem`, `UpdateItem`, `DeleteItem`, `BatchGetItem`, `BatchWriteItem`, `TransactWriteItems`)
+  plus `DescribeTable`, and — unless the table is provisioned elsewhere and `create-table` is off —
+  `CreateTable` and `UpdateTimeToLive`.
+
+#### What it costs
+
+Alone among the backends, this one is billed per request, so the price is part of the design and
+worth knowing before planning around it (on-demand, us-east-1 rates):
+
+- **A session write is a transaction, and DynamoDB bills a transactional write at twice a plain
+  one.** That is the price of the removal and its announcement being atomic, and of a multi-item
+  save being all-or-nothing. An indexed-mode session save is about eight requests; at $0.625 per
+  million plain writes, a million session saves land in the low tens of dollars.
+- **The poll is a standing charge.** One replica polling one database every 100 ms is roughly 0.9
+  million strongly consistent reads a day — about $3.30 per replica and database per month while
+  nothing happens at all. The sweep adds a lease write and an index read per interval. Both scale
+  with replicas × databases, not with traffic; widen the intervals if events may arrive later.
+- **One item tops out at 400 KB**, so a session attribute has to fit in that; a bigger one is
+  refused with `ERR value too large for the backend`, before anything is written. Collections
+  (the principal index, the expiration buckets) store one item per member and have no such limit.
+
+The tests run against an emulator, because AWS publishes no DynamoDB you can run;
+`.docs/design/architecture.md` §12.6 records exactly what that does and does not prove, and the
+store module carries an opt-in suite against a real table for the difference.
 
 ## What is implemented
 
@@ -632,6 +712,10 @@ Redis is the oracle, so the two runs are expected to agree — including that a 
 against one instance is served by the other.
 See [its README](examples/session-example-etcd/README.md).
 
+[`examples/session-example-dynamodb`](examples/session-example-dynamodb) is the same application
+over the DynamoDB server, its adapters sharing one emulated DynamoDB (Floci) — see
+[its README](examples/session-example-dynamodb/README.md).
+
 ## Limitations and non-goals
 
 - Reactive / WebFlux is out of scope. Only the servlet session repositories are tested against the
@@ -653,8 +737,8 @@ Java 25 or later.
 ./mvnw clean spring-javaformat:apply test
 ```
 
-The etcd backend's tests start a real etcd in a container, so a Docker (or compatible) daemon has to
-be running for the full build.
+The etcd backend's tests start a real etcd in a container, and the DynamoDB backend's start the
+Floci emulator in one, so a Docker (or compatible) daemon has to be running for the full build.
 
 The performance harness is not part of that build — it measures rather than asserts, and it takes
 minutes. Run it on its own:
@@ -668,16 +752,18 @@ tables to that module's `target/performance/`. `.docs/design/etcd-performance.md
 written up: the etcd numbers are read against the in-memory ones, which are the same cases with the
 network taken out.
 
-The build has six modules, in two layers — a store, and the server built around it:
+The build has eight modules, in two layers — a store, and the server built around it:
 
 | Module | What it is |
 | --- | --- |
 | `redis-adapter-for-spring-session-core` | The `KeyValueStore` SPI and the protocol, command, pub/sub and server layers. Depends on `slf4j-api` and `jspecify` and nothing else, and contains no backend. |
 | `redis-adapter-for-spring-session-inmemory` | The in-memory backend. Depends on the core only, exactly as an external backend would. |
 | `redis-adapter-for-spring-session-etcd` | The etcd backend. Also depends on the core only: it talks to etcd's HTTP gateway with the JDK's own client, so no gRPC stack is added to the server. Its tests run against a real etcd in a container. |
+| `redis-adapter-for-spring-session-dynamodb` | The DynamoDB backend. Depends on the core and the AWS SDK's `dynamodb` client over the JDK's own HTTP connection — no Netty, no Jackson. Its tests run against the Floci emulator in a container, with an opt-in suite for a real table. |
 | `redis-adapter-for-spring-session-server` | Everything the Spring Boot server is except the backend: the properties, the lifecycle, the actuator, TLS. Holds the compatibility tests that drive it through a real Lettuce client running stock Spring Session, and publishes them as a `test-jar` for the servers built on it. |
 | `redis-adapter-for-spring-session-server-inmemory` | The runnable server around the in-memory backend. |
 | `redis-adapter-for-spring-session-server-etcd` | The runnable server around the etcd backend. |
+| `redis-adapter-for-spring-session-server-dynamodb` | The runnable server around the DynamoDB backend, its client configured through Spring Cloud AWS. |
 
 Every example in this README is taken from a source file that these modules compile and run;
 `ReadmeExamplesTests` fails if the two drift apart.

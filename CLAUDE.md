@@ -46,8 +46,9 @@ An example is named `session-example-<backend>`, so a second backend sorts next 
   - `redis-adapter-for-spring-session-core` - dependency-free core: the `KeyValueStore` SPI plus the protocol, command, pubsub and server layers. It never contains a concrete `KeyValueStore` implementation.
   - `redis-adapter-for-spring-session-inmemory` - the in-memory reference backend. Depends on `core` only, exactly like any external backend.
   - `redis-adapter-for-spring-session-etcd` - the etcd backend, the shared one. Depends on `core` only and has the same runtime dependencies: it speaks etcd's v3 API as JSON over the gRPC gateway with the JDK's `HttpClient`, so no gRPC stack reaches the server. Its tests need a Docker daemon (Testcontainers).
+  - `redis-adapter-for-spring-session-dynamodb` - the DynamoDB backend, the second shared one. Depends on `core` and — the one backend allowed a driver — `software.amazon.awssdk:dynamodb` over `url-connection-client`, with the SDK's Netty/Apache HTTP clients excluded. The store is handed a built `DynamoDbClient` rather than building one. Its tests run against the Floci emulator (Docker required); `.docs/design/architecture.md` §12.6 records what an emulator cannot prove and the opt-in suites that cover it.
   - `redis-adapter-for-spring-session-server` - everything the Spring Boot server is *except* a backend: `RedisAdapterProperties`, `RedisAdapterServerAutoConfiguration` (registered through `AutoConfiguration.imports`), the lifecycle, health, metrics and TLS, plus the `KeyValueStoreFactory` SPI. Depends on `core` only. It contains no runnable application, produces no `exec` jar, and must never gain a dependency on a backend outside test scope. Its tests run on a local `TestBackendConfiguration`, and it publishes them as a `test-jar`: `AdapterServerTestConfiguration`, `SessionKeys`, `ReadmeSnippets`, `BackendSpiBenchmark`, `SessionPerformanceHarness`, `CallCounter` and the TLS material, which is the harness every server module - including one built outside this repository - is proven with.
-  - `redis-adapter-for-spring-session-server-<backend>` - the runnable server around one backend: `<Backend>BackendProperties`, `<Backend>KeyValueStoreFactory`, `<Backend>BackendConfiguration` and a `@SpringBootApplication`, and the `exec` jar. `-server-inmemory` and `-server-etcd` are the two here. This is the seam the whole split exists for: a store that cannot be published (Gemfire, say) gets a module of exactly this shape in a private repository, depending on the released `-server` artifact and nothing else.
+  - `redis-adapter-for-spring-session-server-<backend>` - the runnable server around one backend: `<Backend>BackendProperties`, `<Backend>KeyValueStoreFactory`, `<Backend>BackendConfiguration` and a `@SpringBootApplication`, and the `exec` jar. `-server-inmemory`, `-server-etcd` and `-server-dynamodb` are the three here (`-server-dynamodb` additionally carries `spring-cloud-aws-starter-dynamodb`, so the `DynamoDbClient` its factory is handed is configured by `spring.cloud.aws.*` properties). This is the seam the whole split exists for: a store that cannot be published (Gemfire, say) gets a module of exactly this shape in a private repository, depending on the released `-server` artifact and nothing else.
 
 There is no `redis-adapter.backend` property and there must not be one: which jar is running *is*
 the choice. `RedisAdapterServerAutoConfiguration` refuses to start on any number of
@@ -135,11 +136,15 @@ reason the split exists: keep it possible.
   from a Spring Boot `SslBundle`, including certificate rotation without a restart.
 - The Spring Boot server module: `redis-adapter.*` properties, lifecycle, actuator health and
   metrics, auto-configured for whichever server module depends on it.
-- Two servers: in-memory (single-node) and etcd (shared, so several adapters serve the same
-  sessions and a key one of them expires is announced to the clients of all of them).
-  `.docs/design/architecture.md` §11 is the etcd design, including why the events come from a watch
-  and what a tombstone is for, and §11.6 what it costs. A session write is twelve etcd raft writes,
-  so anything added to the write path is measured in those, not in lines of code.
+- Three servers: in-memory (single-node), etcd and DynamoDB (both shared, so several adapters
+  serve the same sessions and a key one of them expires is announced to the clients of all of
+  them). `.docs/design/architecture.md` §11 is the etcd design, including why the events come from
+  a watch and what a tombstone is for, and §11.6 what it costs — a session write is six etcd raft
+  writes, so anything added to that write path is measured in those. §12 is the DynamoDB design:
+  one item per member, removal and announcement in one transaction, a polled key-event log because
+  Streams cannot be a watch, expiry owned by the adapter because AWS's TTL is a 48-hour-lag garbage
+  collector, and — unique to this backend — every request is billed, so anything added to its
+  paths is measured in requests.
 
 Two rules constrain anything added here:
 
