@@ -343,8 +343,27 @@ Named because each could change a decision above:
 - **TLS and authentication** beyond the default credentials chain, which the etcd backend has and
   this one would need to match, plus IAM: which policy the adapter needs is documentation no other
   backend required.
-- **DynamoDB Local as a second opinion.** Running the same suite against a different emulator
-  would catch the places where Floci is the only thing that agrees with us.
+- **A second emulator as a second opinion.** Running the same suite against a different emulator
+  would catch the places where Floci is the only thing that agrees with us. **Decided
+  2026-07-26: the second opinion is kumo (`ghcr.io/sivchari/kumo`), not DynamoDB Local — and it
+  is the second opinion, never the primary.** Its DynamoDB implementation (~7,300 lines of Go)
+  was read against every limit the spike probed. The core is genuinely there:
+  `TransactWriteItems` is a two-phase, all-or-nothing transaction with `CancellationReasons`
+  (the feature whose absence disqualified Alternator), and the 100-item transaction ceiling,
+  the 25-item batch ceiling, GSIs, `Query` by `IndexName`, `ReturnValues=ALL_OLD`, condition
+  expressions and a TTL reaper (30 s tick) are all implemented. Three checks are missing, each
+  permissive in exactly the direction that disqualified Alternator — code proved against it
+  would be rejected by DynamoDB:
+  - **no 400 KB item ceiling** at all, so the `ValueTooLargeException` mapping (task `021`)
+    cannot be proven against it;
+  - **no refusal of two operations on one item in one transaction** (only "exactly one action
+    per member" is checked), so a save that touches one item twice passes kumo and fails AWS;
+  - **no reserved-word list**, so a condition naming `until` bare passes without
+    `ExpressionAttributeNames`.
+  The kumo suite is therefore opt-in, pointed at the emulator by endpoint override, and a
+  `GenericContainer` (no Testcontainers module exists for it). All three gaps are small
+  patches, worth contributing upstream — with them kumo beats DynamoDB Local as the second
+  opinion: single binary, fast start, CI-shaped.
 
 ---
 
