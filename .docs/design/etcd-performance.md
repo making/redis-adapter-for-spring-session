@@ -20,24 +20,25 @@ raft writes, and what grows with what.
 ## How to run it
 
 ```bash
-./mvnw test -Pperformance -pl redis-adapter-for-spring-session-server -am
+./mvnw test -Pperformance
 ```
 
 The harness is excluded from an ordinary build by its `performance` JUnit tag (surefire's
 `excludedGroups`, cleared by that profile), because it takes minutes, needs a Docker daemon
-and asserts nothing. The `-am` matters: the harness lives in the server module and measures
-the backend modules, so without it the backends come from the local repository and a change
-to one of them is not in the run at all — which is how the first run of the numbers below
-was taken twice. Three classes:
+and asserts nothing. It runs over the whole reactor because each server module measures its
+own backend and only the pair of them means anything: the shared cases come from
+`BackendSpiBenchmark` in the server module's `test-jar`, so the etcd column and the
+in-memory one are the same code against a different store. Four classes:
 
 | Class | What it measures |
 |---|---|
-| `BackendSpiPerformanceTests` | one `KeyValueStore` call at a time, `EtcdKeyValueStore` against `InMemoryKeyValueStore`. The in-memory column is what separates "etcd is slow" from "the adapter is slow". |
+| `EtcdSpiPerformanceTests` | one `KeyValueStore` call at a time against `EtcdKeyValueStore`, plus what only etcd has: how many raft writes an operation costs, and where a session stops fitting. |
+| `InMemorySpiPerformanceTests` | the same shared cases against `InMemoryKeyValueStore`. This column is what separates "etcd is slow" from "the adapter is slow". |
 | `EtcdSessionPerformanceTests` | stock Spring Session in indexed mode over a real Lettuce client, sessions in etcd — the only numbers an application actually waits for. |
 | `InMemorySessionPerformanceTests` | the same harness, sessions in a map. The baseline. |
 
-Each writes its tables to `target/performance/*.md`, which is where the numbers below were
-copied from rather than retyped. Round trips are counted from etcd's own `/metrics`
+Each writes its tables to its own module's `target/performance/*.md`, which is where the
+numbers below were copied from rather than retyped. Round trips are counted from etcd's own `/metrics`
 (`grpc_server_handled_total`, by method) in a pass of their own — one operation between two
 scrapes, with everything it needs already written — so nothing sits between the store and
 etcd inflating the latency being timed.

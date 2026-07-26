@@ -19,8 +19,9 @@ and configures everything with properties. Only the connection target changes.
                                              KeyValueStore  |  (one SPI)
                                                             v
                                               +---------------------------+
-                                              | in-memory backend, etcd,  |
-                                              | or a backend you write    |
+                                              | in memory, etcd, or a     |
+                                              | store you build a server  |
+                                              | around                    |
                                               +---------------------------+
 ```
 
@@ -56,11 +57,12 @@ Do not use it when:
 
 Two things are worth knowing before you start:
 
-- **The default backend is in-memory.** It keeps the sessions in the adapter process, so they are
-  gone when it restarts and are not shared with a second adapter. That is the development and
-  single-instance backend, and it is what makes the server runnable with no configuration at all.
-  Running several adapters in front of the same sessions needs a backend that is itself shared:
-  [etcd](#etcd) is bundled, and anything else is a module you write.
+- **There is a server per store, and the jar you run is the choice.** The in-memory one keeps the
+  sessions in the adapter process, so they are gone when it restarts and are not shared with a
+  second adapter; that is the development and single-instance server, and it runs with no
+  configuration at all. Running several adapters in front of the same sessions needs a store that
+  is itself shared: [etcd](#etcd) is published, and anything else is a server you assemble, which
+  is [three small classes](#writing-a-backend) and no fork of this project.
 - **The adapter itself holds no session state.** Everything it is asked to remember goes to the
   backend, so replicas scale as far as the backend does.
 
@@ -75,11 +77,18 @@ Two things are worth knowing before you start:
 ### 1. Start the adapter
 
 ```bash
-java -jar redis-adapter-for-spring-session-server-<version>-exec.jar
+java -jar redis-adapter-for-spring-session-server-inmemory-<version>-exec.jar
 ```
 
 It listens on port 6379, serves one database, asks for no password, and keeps the sessions in
-memory.
+memory. To keep them in etcd instead, run the etcd server and say where the cluster is:
+
+```bash
+java -jar redis-adapter-for-spring-session-server-etcd-<version>-exec.jar \
+    --redis-adapter.etcd.endpoints=http://etcd-0:2379
+```
+
+Nothing else differs between the two, and nothing about the application changes.
 
 ### 2. Give the application Spring Session
 
@@ -261,8 +270,12 @@ The server side of the same connection is [below](#tls-1).
 ## Running the server
 
 ```bash
-java -jar redis-adapter-for-spring-session-server-<version>-exec.jar
+java -jar redis-adapter-for-spring-session-server-<backend>-<version>-exec.jar
 ```
+
+Which store the sessions land in is which jar this is; the published ones are `inmemory` and
+`etcd`, and they are listed under [Backends](#backends). Everything else on this page is the same
+whichever one you run.
 
 ### Configuration reference
 
@@ -275,23 +288,15 @@ Every setting is an ordinary Spring Boot property, so a command line argument, a
 | --- | --- | --- |
 | `redis-adapter.bind-address` | `0.0.0.0` | The address to listen on. The default accepts on every interface, which is what a server in a container wants. |
 | `redis-adapter.port` | `6379` | The port to listen on. `0` binds an ephemeral one. |
-| `redis-adapter.backend` | `in-memory` | Which registered backend holds the session data, by the name it answers to. |
 | `redis-adapter.password` | none | The password clients must authenticate with. Unset, anything that reaches the port can read and write every session. |
 | `redis-adapter.databases` | `1` | How many numbered databases to serve, each an independent keyspace. |
 | `redis-adapter.shutdown-timeout` | `10s` | How long a connection still running a command is given before it is interrupted on shutdown. |
 | `redis-adapter.ssl.enabled` | unset | Whether to serve TLS. Unset means TLS exactly when a bundle is named; `false` keeps a configured bundle unused. |
 | `redis-adapter.ssl.bundle` | none | The `spring.ssl.bundle.*` holding the server's certificate and key. |
 | `redis-adapter.ssl.client-auth` | `none` | Whether clients must present a certificate of their own: `none`, `want` or `need`. |
-| `redis-adapter.in-memory.sweeper-enabled` | `true` | Whether the in-memory backend sweeps for keys whose time has passed but which nobody has touched. |
-| `redis-adapter.in-memory.sweep-interval` | `1s` | How long between sweeps, which is the longest an expired key can sit there unnoticed. |
-| `redis-adapter.etcd.endpoints` | `http://localhost:2379` | The etcd cluster's client URLs. Requests go to the one that last worked and move on when a member cannot be reached. |
-| `redis-adapter.etcd.key-prefix` | `/redis-adapter/` | Where in etcd's keyspace the sessions live. Each database gets `<key-prefix><database>/` of its own. |
-| `redis-adapter.etcd.connect-timeout` | `5s` | How long to wait for a connection to an endpoint. |
-| `redis-adapter.etcd.request-timeout` | `5s` | How long to wait for etcd to answer, which bounds how long a Redis command can hang. |
-| `redis-adapter.etcd.watch-retry-delay` | `1s` | How long before the watch that delivers session events is opened again after it fails. |
-| `redis-adapter.etcd.username` | none | The etcd user, for a cluster with authentication enabled. |
-| `redis-adapter.etcd.password` | none | That user's password. |
-| `redis-adapter.etcd.ssl-bundle` | none | The `spring.ssl.bundle.*` to reach an `https://` etcd with, and the client certificate for mutual TLS. |
+
+Each server adds the settings of the store it was built around, under
+`redis-adapter.<backend>`; they are listed with that backend, under [Backends](#backends).
 
 Written as properties, the settings an operator is most likely to change look like this:
 
@@ -300,11 +305,8 @@ Written as properties, the settings an operator is most likely to change look li
 redis-adapter.bind-address=0.0.0.0
 redis-adapter.port=6379
 redis-adapter.databases=1
-redis-adapter.backend=in-memory
 redis-adapter.password=s3cret
 ```
-
-What the backend itself is given is under [Backends](#backends).
 
 The same settings as environment variables, which is how a container platform usually hands them
 over:
@@ -314,8 +316,6 @@ over:
 REDIS_ADAPTER_PORT=16379
 REDIS_ADAPTER_PASSWORD=s3cret
 REDIS_ADAPTER_DATABASES=16
-REDIS_ADAPTER_IN_MEMORY_SWEEP_INTERVAL=5s
-REDIS_ADAPTER_ETCD_ENDPOINTS=http://etcd-0:2379,http://etcd-1:2379
 ```
 
 ### TLS
@@ -358,22 +358,30 @@ port carries nothing but the actuator; sessions are served over RESP on `redis-a
 ### Running more than one
 
 The adapter keeps no session state, so replicas behind a load balancer serve the same sessions —
-but only as far as the backend does. The in-memory backend does not, since each replica owns its
-own map. Scaling out means a backend that is shared, and one that can tell a replica about a key
-another replica expired, because that is what an application's `SessionExpiredEvent` is made of.
-[etcd](#etcd) does both.
+but only as far as the backend does. The in-memory server does not, since each replica owns its
+own map. Scaling out means a server built around a store that is shared, and one that can tell a
+replica about a key another replica expired, because that is what an application's
+`SessionExpiredEvent` is made of. [etcd](#etcd) does both.
 
 ## Backends
 
-Which backend holds the sessions is one property, `redis-adapter.backend`, matched against the name
-each backend answers to. Two are bundled, and nothing about the application changes when the answer
-changes.
+Each store gets a server of its own, `redis-adapter-for-spring-session-server-<backend>`, and the
+jar you run is the whole of the choice — there is no property to set and nothing to select. Two
+are published, and nothing about the application changes between them. A store this project does
+not ship gets a server of your own; see [Writing a backend](#writing-a-backend).
 
 ### In-memory
 
-The default, and what the server runs with no configuration at all. Each adapter owns its own map,
-so the sessions are gone when it restarts and a second adapter serves different ones. Keys nobody
-comes back to are removed by a sweeper.
+`redis-adapter-for-spring-session-server-inmemory`, which runs with no configuration at all. Each
+adapter owns its own map, so the sessions are gone when it restarts and a second adapter serves
+different ones. Keys nobody comes back to are removed by a sweeper.
+
+<!-- properties:redis-adapter.in-memory -->
+
+| Property | Default | What it does |
+| --- | --- | --- |
+| `redis-adapter.in-memory.sweeper-enabled` | `true` | Whether the in-memory backend sweeps for keys whose time has passed but which nobody has touched. |
+| `redis-adapter.in-memory.sweep-interval` | `1s` | How long between sweeps, which is the longest an expired key can sit there unnoticed. |
 
 <!-- snippet:server-in-memory -->
 ```properties
@@ -383,14 +391,35 @@ redis-adapter.in-memory.sweep-interval=1s
 
 ### etcd
 
-Sessions live in an [etcd](https://etcd.io) cluster, so they are shared by every adapter pointed at
-it and outlive all of them. This is the backend for running more than one adapter.
+`redis-adapter-for-spring-session-server-etcd`. Sessions live in an [etcd](https://etcd.io)
+cluster, so they are shared by every adapter pointed at it and outlive all of them. This is the
+server for running more than one adapter.
+
+<!-- properties:redis-adapter.etcd -->
+
+| Property | Default | What it does |
+| --- | --- | --- |
+| `redis-adapter.etcd.endpoints` | `http://localhost:2379` | The etcd cluster's client URLs. Requests go to the one that last worked and move on when a member cannot be reached. |
+| `redis-adapter.etcd.key-prefix` | `/redis-adapter/` | Where in etcd's keyspace the sessions live. Each database gets `<key-prefix><database>/` of its own. |
+| `redis-adapter.etcd.connect-timeout` | `5s` | How long to wait for a connection to an endpoint. |
+| `redis-adapter.etcd.request-timeout` | `5s` | How long to wait for etcd to answer, which bounds how long a Redis command can hang. |
+| `redis-adapter.etcd.watch-retry-delay` | `1s` | How long before the watch that delivers session events is opened again after it fails. |
+| `redis-adapter.etcd.username` | none | The etcd user, for a cluster with authentication enabled. |
+| `redis-adapter.etcd.password` | none | That user's password. |
+| `redis-adapter.etcd.ssl-bundle` | none | The `spring.ssl.bundle.*` to reach an `https://` etcd with, and the client certificate for mutual TLS. |
 
 <!-- snippet:server-etcd -->
 ```properties
-redis-adapter.backend=etcd
 redis-adapter.etcd.endpoints=http://etcd-0:2379,http://etcd-1:2379,http://etcd-2:2379
 redis-adapter.etcd.key-prefix=/redis-adapter/
+```
+
+The same as environment variables, a list of endpoints included:
+
+<!-- snippet:server-etcd-env -->
+```properties
+REDIS_ADAPTER_ETCD_ENDPOINTS=http://etcd-0:2379,http://etcd-1:2379
+REDIS_ADAPTER_ETCD_KEY_PREFIX=/redis-adapter/
 ```
 
 Three things are worth knowing:
@@ -402,7 +431,7 @@ Three things are worth knowing:
 - **Events cross the adapters.** Every adapter watches its keyspace, so a session that expires or
   is deleted anywhere is announced to the clients subscribed everywhere. An application connected
   to one adapter therefore hears about a session another adapter removed, which is what
-  `SessionExpiredEvent` needs and what the in-memory backend cannot do.
+  `SessionExpiredEvent` needs and what the in-memory server cannot do.
 - **The keyspace is yours to choose.** `key-prefix` is where the sessions live, and each database
   gets a keyspace of its own underneath it. Two deployments can share a cluster by taking different
   prefixes; a cluster used for other things is untouched outside them.
@@ -513,7 +542,7 @@ Five rules matter more than the signatures:
 Implementations must be safe for concurrent use: the server runs one virtual thread per
 connection.
 
-The server picks a backend by name. A backend module contributes one bean, a
+A server is built around exactly one backend, and what a backend contributes to it is one bean, a
 `KeyValueStoreFactory`, which is asked for a store per database:
 
 <!-- snippet:backend-factory -->
@@ -546,22 +575,42 @@ public class MyBackendConfiguration {
 }
 ```
 
-Put the module on the server's classpath and select it:
+Then build a server around it: a Maven module depending on
+`redis-adapter-for-spring-session-server`, holding that configuration class and a main class.
 
-<!-- snippet:backend-selection -->
-```properties
-redis-adapter.backend=my-backend
+<!-- snippet:backend-application -->
+```java
+@SpringBootApplication
+public class MyRedisAdapterServerApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(MyRedisAdapterServerApplication.class, args);
+    }
+
+}
 ```
+
+That is the whole of it. The server module auto-configures the port, the lifecycle, the actuator
+and everything on this page; it never knows what it is writing to, and it refuses to start with
+any number of backends other than one. Nothing in this project is forked, patched or rebuilt — and
+because the module is yours, a store whose driver cannot be published, or whose licence will not
+allow it, is served by a server that lives in your own repository.
 
 Two details are easy to miss. Each database is an independent keyspace, so two calls to `create`
 must return stores that share no keys — a shared backend separates them by the index it is given.
-And every registered factory is created whether or not it is the one selected, so a factory must
-hold no resource and open no connection until `create` is called.
+And the factory is built while the application is still starting and asked for its stores
+afterwards, so it must hold no resource and open no connection until `create` is called.
 
-`am.ik.redis.adapter.inmemory.InMemoryKeyValueStore` is the reference implementation, and it
-depends on the core exactly as an external backend does.
-`am.ik.redis.adapter.etcd.EtcdKeyValueStore` is the worked example of the harder half: how a shared
-backend keeps read-modify-write atomic across replicas, and how it carries key events between them.
+`redis-adapter-for-spring-session-server-inmemory` is the smallest complete example of all this,
+and `am.ik.redis.adapter.inmemory.InMemoryKeyValueStore` is the reference store, depending on the
+core exactly as an external backend does. `am.ik.redis.adapter.etcd.EtcdKeyValueStore` is the
+worked example of the harder half: how a shared backend keeps read-modify-write atomic across
+replicas, and how it carries key events between them.
+
+The server module also publishes its tests as a `test-jar`. It holds the harness the backends here
+are proven with — the shipped configuration under a real Lettuce client running stock Spring
+Session, the key names Spring Session writes, and the benchmark — so a backend of your own can be
+held to the same standard as the ones in this repository.
 
 ## Example applications
 
@@ -590,8 +639,8 @@ See [its README](examples/session-example-etcd/README.md).
 - Redis Cluster, Sentinel, replication and persistence are not implemented, and neither is any
   command Spring Session does not use.
 - Only as much of RESP3 as Lettuce needs to complete its handshake and run the session commands.
-- The default backend is single-node and in-memory: sessions do not survive a restart and are not
-  shared between adapter replicas. Sharing them means [etcd](#etcd) or a backend of your own.
+- The in-memory server is single-node: sessions do not survive a restart and are not shared
+  between adapter replicas. Sharing them means [etcd](#etcd) or a server of your own.
 - The etcd backend inherits etcd's shape: values are kept in memory and replicated to every member,
   so it suits sessions rather than large payloads, and a cluster has a total size limit. What it
   costs is measured in [What it costs](#what-it-costs) rather than left to be discovered.
@@ -611,25 +660,27 @@ The performance harness is not part of that build — it measures rather than as
 minutes. Run it on its own:
 
 ```bash
-./mvnw test -Pperformance -pl redis-adapter-for-spring-session-server -am
+./mvnw test -Pperformance
 ```
 
-It reports what each backend costs, at the SPI and through a real client, and writes its tables to
-`target/performance/`. `.docs/design/etcd-performance.md` is one run of it, written up. Keep the
-`-am`: the harness lives in the server module but measures the backend modules, and without it
-they come from the local repository rather than from your working copy.
+Each server module measures its own backend, at the SPI and through a real client, and writes its
+tables to that module's `target/performance/`. `.docs/design/etcd-performance.md` is one run of it,
+written up: the etcd numbers are read against the in-memory ones, which are the same cases with the
+network taken out.
 
-The build has four modules:
+The build has six modules, in two layers — a store, and the server built around it:
 
 | Module | What it is |
 | --- | --- |
 | `redis-adapter-for-spring-session-core` | The `KeyValueStore` SPI and the protocol, command, pub/sub and server layers. Depends on `slf4j-api` and `jspecify` and nothing else, and contains no backend. |
-| `redis-adapter-for-spring-session-inmemory` | The bundled in-memory backend. Depends on the core only, exactly as an external backend would. |
+| `redis-adapter-for-spring-session-inmemory` | The in-memory backend. Depends on the core only, exactly as an external backend would. |
 | `redis-adapter-for-spring-session-etcd` | The etcd backend. Also depends on the core only: it talks to etcd's HTTP gateway with the JDK's own client, so no gRPC stack is added to the server. Its tests run against a real etcd in a container. |
-| `redis-adapter-for-spring-session-server` | The Spring Boot server, and the end-to-end tests that drive it through a real Lettuce client running stock Spring Session. |
+| `redis-adapter-for-spring-session-server` | Everything the Spring Boot server is except the backend: the properties, the lifecycle, the actuator, TLS. Holds the compatibility tests that drive it through a real Lettuce client running stock Spring Session, and publishes them as a `test-jar` for the servers built on it. |
+| `redis-adapter-for-spring-session-server-inmemory` | The runnable server around the in-memory backend. |
+| `redis-adapter-for-spring-session-server-etcd` | The runnable server around the etcd backend. |
 
-Every example in this README is taken from a source file that the server module's tests compile and
-run; `ReadmeExamplesTests` fails if the two drift apart.
+Every example in this README is taken from a source file that these modules compile and run;
+`ReadmeExamplesTests` fails if the two drift apart.
 
 ## Design documents
 

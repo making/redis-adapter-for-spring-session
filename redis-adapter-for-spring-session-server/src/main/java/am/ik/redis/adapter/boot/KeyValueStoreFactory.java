@@ -6,10 +6,16 @@ import am.ik.redis.adapter.store.KeyValueStore;
  * Creates the backend of one numbered database.
  *
  * <p>
- * This is what a backend module contributes to the server: a single bean, naming itself,
- * that the server calls once per database when {@code redis-adapter.backend} asks for
- * that name. How many databases there are, and everything else about the server, stays
- * the server's business.
+ * This is the whole of what a backend contributes to the server: a single bean, naming
+ * itself, that the server calls once per database. How many databases there are, and
+ * everything else about the server, stays the server's business.
+ *
+ * <p>
+ * A server is built around exactly one backend and refuses to start with any other
+ * number, so a deployment chooses its backend by choosing the jar it runs. Supporting a
+ * store this project has never heard of means a module of its own — the server module,
+ * this bean, and a main class — and nothing in the server has to be changed or even
+ * rebuilt for it.
  *
  * <p>
  * A database is an independent keyspace, so two calls must return stores that share no
@@ -18,18 +24,16 @@ import am.ik.redis.adapter.store.KeyValueStore;
  * index it is given.
  *
  * <p>
- * Every registered factory is created whether or not it is the one selected, and the
- * selection is made afterwards. A factory must therefore hold no resource and open no
- * connection until {@link #create(int)} is called, or a backend nobody asked for would go
- * looking for a server nobody configured.
+ * The factory is created while the application starts and is asked for its stores after
+ * everything is bound, so it must hold no resource and open no connection until
+ * {@link #create(int)} is called.
  */
 public interface KeyValueStoreFactory {
 
 	/**
-	 * Returns the name this backend answers to, which is what
-	 * {@code redis-adapter.backend} is matched against. Two backends must not share a
-	 * name; the server refuses to start if they do.
-	 * @return the backend's name, as an operator writes it
+	 * Returns the name of the backend, which is what the server logs and what a reader of
+	 * the logs uses to tell one deployment from another.
+	 * @return the backend's name, as an operator would write it
 	 */
 	String name();
 

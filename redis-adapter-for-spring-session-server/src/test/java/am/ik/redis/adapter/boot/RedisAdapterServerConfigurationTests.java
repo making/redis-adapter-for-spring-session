@@ -9,7 +9,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 
-import am.ik.redis.adapter.inmemory.InMemoryKeyValueStore;
 import am.ik.redis.adapter.server.RedisAdapterServer;
 import am.ik.redis.adapter.store.KeyValueStore;
 import io.lettuce.core.RedisClient;
@@ -19,6 +18,7 @@ import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.StringCodec;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -40,16 +40,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class RedisAdapterServerConfigurationTests {
 
-	private final ApplicationContextRunner runner = new ApplicationContextRunner()
-		.withUserConfiguration(KeyValueStoreConfiguration.class, RedisAdapterServerConfiguration.class)
+	private final ApplicationContextRunner server = new ApplicationContextRunner()
+		.withConfiguration(AutoConfigurations.of(RedisAdapterServerAutoConfiguration.class))
 		.withPropertyValues("redis-adapter.bind-address=127.0.0.1", "redis-adapter.port=0");
 
+	private final ApplicationContextRunner runner = this.server.withUserConfiguration(TestBackendConfiguration.class);
+
 	@Test
-	void servesOneInMemoryDatabaseByDefault() {
+	void servesOneDatabaseOutOfItsBackendByDefault() {
 		this.runner.run(context -> {
 			assertThat(context).hasSingleBean(KeyValueStores.class).hasSingleBean(RedisAdapterServer.class);
 			assertThat(context.getBean(KeyValueStores.class).databases()).hasSize(1)
-				.allSatisfy(store -> assertThat(store).isInstanceOf(InMemoryKeyValueStore.class));
+				.allSatisfy(store -> assertThat(store).isInstanceOf(RecordingKeyValueStore.class));
 			assertThat(context.getBean(RedisAdapterServer.class).isRunning()).isTrue();
 		});
 	}
@@ -139,32 +141,28 @@ class RedisAdapterServerConfigurationTests {
 		});
 	}
 
+	/**
+	 * The server module ships no backend, so a server assembled without one serves
+	 * nothing. Saying so as it starts is the alternative to a process that accepts
+	 * connections and fails every command.
+	 */
 	@Test
-	void refusesToStartWhenTheBackendIsUnknown() {
-		this.runner.withPropertyValues("redis-adapter.backend=nowhere")
-			.run(context -> assertThat(context).hasFailed()
-				.getFailure()
-				.rootCause()
-				.hasMessage("No backend answers to redis-adapter.backend=nowhere; this server has [etcd, in-memory]"));
+	void refusesToStartWithNoBackend() {
+		this.server.run(context -> assertThat(context).hasFailed()
+			.getFailure()
+			.rootCause()
+			.hasMessageContaining("This server has no backend to keep sessions in"));
 	}
 
 	/**
-	 * The bundled backend is not privileged. A module that contributes a factory under
-	 * its own name takes over, and the server writes to it — which is the whole of what a
-	 * future backend has to do to be used.
-	 *
-	 * <p>
-	 * Both backends are registered in both runs and only the property differs, so the
-	 * choice is made from the name when the application starts rather than from which
-	 * factory happens to be on the classpath. That is what keeps it a choice at all in an
-	 * ahead-of-time compiled image, where a condition on the bean would have been decided
-	 * while the image was built.
+	 * Whatever backend is on the class path is the one the sessions land in, and the
+	 * server has no opinion about which that is — no property to match, no bundled
+	 * default to be overridden. A real client writes through the server, since a store
+	 * that is wired but never written to would satisfy any assertion about beans.
 	 */
 	@Test
-	void picksTheBackendThatAnswersToTheConfiguredName() {
-		ApplicationContextRunner withBothBackends = this.runner.withUserConfiguration(FakeBackendConfiguration.class);
-
-		withBothBackends.withPropertyValues("redis-adapter.backend=fake").run(context -> {
+	void writesToTheOneBackendItWasBuiltAround() {
+		this.runner.run(context -> {
 			KeyValueStores databases = context.getBean(KeyValueStores.class);
 			assertThat(databases.database(0)).isInstanceOf(RecordingKeyValueStore.class);
 
@@ -173,24 +171,20 @@ class RedisAdapterServerConfigurationTests {
 
 			assertThat(databases.database(0).exists("key".getBytes(UTF_8))).isTrue();
 		});
-
-		withBothBackends.withPropertyValues("redis-adapter.backend=in-memory")
-			.run(context -> assertThat(context.getBean(KeyValueStores.class).database(0))
-				.isInstanceOf(InMemoryKeyValueStore.class));
 	}
 
 	/**
-	 * Two backends under one name is a question with no right answer: picking either
-	 * would leave nobody able to say where the sessions went.
+	 * Two backends is a question with no right answer: picking either would leave nobody
+	 * able to say where the sessions went. A server is built around exactly one, so this
+	 * is an assembly mistake and is refused as one.
 	 */
 	@Test
-	void refusesToStartWhenTwoBackendsAnswerToTheSameName() {
-		this.runner.withUserConfiguration(FakeBackendConfiguration.class, SecondFakeBackendConfiguration.class)
-			.withPropertyValues("redis-adapter.backend=fake")
+	void refusesToStartWithMoreThanOneBackend() {
+		this.runner.withUserConfiguration(SecondBackendConfiguration.class)
 			.run(context -> assertThat(context).hasFailed()
 				.getFailure()
 				.rootCause()
-				.hasMessage("More than one backend answers to redis-adapter.backend=fake"));
+				.hasMessageContaining("This server has more than one backend to keep sessions in: [second, test]"));
 	}
 
 	/**
@@ -203,17 +197,15 @@ class RedisAdapterServerConfigurationTests {
 	void closesEveryBackendWhenTheContextCloses() {
 		List<RecordingKeyValueStore> stores = new ArrayList<>();
 
-		this.runner.withUserConfiguration(FakeBackendConfiguration.class)
-			.withPropertyValues("redis-adapter.backend=fake", "redis-adapter.databases=2")
-			.run(context -> {
-				stores.addAll(context.getBean(KeyValueStores.class)
-					.databases()
-					.stream()
-					.map(RecordingKeyValueStore.class::cast)
-					.toList());
-				assertThat(stores).extracting(RecordingKeyValueStore::databaseIndex).containsExactly(0, 1);
-				assertThat(stores).noneMatch(RecordingKeyValueStore::isClosed);
-			});
+		this.runner.withPropertyValues("redis-adapter.databases=2").run(context -> {
+			stores.addAll(context.getBean(KeyValueStores.class)
+				.databases()
+				.stream()
+				.map(RecordingKeyValueStore.class::cast)
+				.toList());
+			assertThat(stores).extracting(RecordingKeyValueStore::databaseIndex).containsExactly(0, 1);
+			assertThat(stores).noneMatch(RecordingKeyValueStore::isClosed);
+		});
 
 		assertThat(stores).hasSize(2).allMatch(RecordingKeyValueStore::isClosed);
 	}
@@ -244,46 +236,24 @@ class RedisAdapterServerConfigurationTests {
 	}
 
 	/**
-	 * A backend module, as one written outside this project would look: a single factory
-	 * bean, naming the backend it is.
+	 * A second backend module, put on the class path beside the first one.
 	 */
 	@Configuration(proxyBeanMethods = false)
-	static class FakeBackendConfiguration {
+	static class SecondBackendConfiguration {
 
 		@Bean
-		KeyValueStoreFactory fakeKeyValueStoreFactory() {
-			return new FakeBackend();
-		}
+		KeyValueStoreFactory secondKeyValueStoreFactory() {
+			return new KeyValueStoreFactory() {
+				@Override
+				public String name() {
+					return "second";
+				}
 
-	}
-
-	/**
-	 * A second module claiming a name the first one already answers to.
-	 */
-	@Configuration(proxyBeanMethods = false)
-	static class SecondFakeBackendConfiguration {
-
-		@Bean
-		KeyValueStoreFactory anotherFakeKeyValueStoreFactory() {
-			return new FakeBackend();
-		}
-
-	}
-
-	/**
-	 * The factory of the fake backend, handing out a store per database that records what
-	 * it was created for and when it was closed.
-	 */
-	record FakeBackend() implements KeyValueStoreFactory {
-
-		@Override
-		public String name() {
-			return "fake";
-		}
-
-		@Override
-		public KeyValueStore create(int databaseIndex) {
-			return new RecordingKeyValueStore(databaseIndex);
+				@Override
+				public KeyValueStore create(int databaseIndex) {
+					return new RecordingKeyValueStore(databaseIndex);
+				}
+			};
 		}
 
 	}

@@ -23,11 +23,11 @@ import java.util.Arrays;
  * that means anything when several ran at once
  * @param note what else the case has to say, or an empty string
  */
-record Measurement(String name, int samples, double p50Millis, double p95Millis, double p99Millis, double maxMillis,
-		double perSecond, String note) {
+public record Measurement(String name, int samples, double p50Millis, double p95Millis, double p99Millis,
+		double maxMillis, double perSecond, String note) {
 
 	/** The header of the table {@link #markdownRow()} produces a line of. */
-	static final String MARKDOWN_HEADER = """
+	public static final String MARKDOWN_HEADER = """
 			| Case | n | p50 | p95 | p99 | max | ops/s | Notes |
 			| --- | --- | --- | --- | --- | --- | --- | --- |""";
 
@@ -40,7 +40,7 @@ record Measurement(String name, int samples, double p50Millis, double p95Millis,
 	 * @param note what else to report, or an empty string
 	 * @return the measurement
 	 */
-	static Measurement of(String name, long[] nanos, long wallNanos, String note) {
+	public static Measurement of(String name, long[] nanos, long wallNanos, String note) {
 		if (nanos.length == 0) {
 			throw new IllegalArgumentException("nothing was measured for " + name);
 		}
@@ -57,7 +57,7 @@ record Measurement(String name, int samples, double p50Millis, double p95Millis,
 	 * @param note what the case learned
 	 * @return a copy carrying that note
 	 */
-	Measurement withNote(String note) {
+	public Measurement withNote(String note) {
 		return new Measurement(this.name, this.samples, this.p50Millis, this.p95Millis, this.p99Millis, this.maxMillis,
 				this.perSecond, this.note.isEmpty() ? note : this.note + "; " + note);
 	}
@@ -66,7 +66,7 @@ record Measurement(String name, int samples, double p50Millis, double p95Millis,
 	 * Returns this measurement as a row of the table {@link #MARKDOWN_HEADER} heads.
 	 * @return the markdown row
 	 */
-	String markdownRow() {
+	public String markdownRow() {
 		return "| %s | %d | %s | %s | %s | %s | %s | %s |".formatted(this.name, this.samples, format(this.p50Millis),
 				format(this.p95Millis), format(this.p99Millis), format(this.maxMillis), formatRate(this.perSecond),
 				this.note.isEmpty() ? "" : this.note);

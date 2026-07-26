@@ -85,8 +85,10 @@ class RedisAdapterServerCertificateRotationTests {
 	 * @return the runner
 	 */
 	private ApplicationContextRunner runner() {
-		return new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(SslAutoConfiguration.class))
-			.withUserConfiguration(KeyValueStoreConfiguration.class, RedisAdapterServerConfiguration.class)
+		return new ApplicationContextRunner()
+			.withConfiguration(
+					AutoConfigurations.of(SslAutoConfiguration.class, RedisAdapterServerAutoConfiguration.class))
+			.withUserConfiguration(TestBackendConfiguration.class)
 			.withPropertyValues("redis-adapter.bind-address=127.0.0.1", "redis-adapter.port=0",
 					"redis-adapter.ssl.bundle=adapter",
 					"spring.ssl.bundle.pem.adapter.keystore.certificate=file:"

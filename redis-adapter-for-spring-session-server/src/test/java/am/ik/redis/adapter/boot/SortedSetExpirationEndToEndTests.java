@@ -201,7 +201,7 @@ class SortedSetExpirationEndToEndTests {
 
 	@EnableAutoConfiguration
 	@EnableRedisIndexedHttpSession(cleanupCron = Scheduled.CRON_DISABLED)
-	@Import({ AdapterServerTestConfiguration.class, SortedSetExpirationConfig.class })
+	@Import({ AdapterServerTestConfiguration.class, TestBackendConfiguration.class, SortedSetExpirationConfig.class })
 	static class SessionApplication {
 
 		@Bean

@@ -8,15 +8,21 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 
 /**
- * Boots the server exactly as it is shipped — the same configuration classes the runnable
+ * Boots the server exactly as it is shipped — the same auto-configuration the runnable
  * application is made of — and points {@code spring.data.redis.*} at it.
  *
  * <p>
  * A test that imports this gets the full stack an application sees in production —
  * Lettuce over TCP, the RESP codec, the command layer and a real backend — with nothing
- * mocked and nothing wired by hand for the occasion. The port and the sweep interval come
- * from {@code application.properties} in this module's test resources; everything else is
- * the shipped default.
+ * mocked and nothing wired by hand for the occasion. The port comes from
+ * {@code application.properties} in the test resources; everything else is the shipped
+ * default.
+ *
+ * <p>
+ * What this deliberately does not bring is the backend, since the server has none: a test
+ * imports the backend configuration of the module it belongs to beside this one, which is
+ * what lets the same harness be run against every backend, this project's and anybody
+ * else's.
  *
  * <p>
  * The {@link KeyValueStores} bean is exposed by that configuration, so a test can assert
@@ -24,15 +30,8 @@ import org.springframework.test.context.DynamicPropertyRegistrar;
  * rather than assumed. The names to assert on come from {@link SessionKeys}.
  */
 @TestConfiguration(proxyBeanMethods = false)
-@Import({ KeyValueStoreConfiguration.class, RedisAdapterServerConfiguration.class })
+@Import(RedisAdapterServerAutoConfiguration.class)
 public class AdapterServerTestConfiguration {
-
-	/**
-	 * Property turning the in-memory backend's active-expiry sweeper off, so that a test
-	 * can prove a key dies of the access that touches it rather than of a background
-	 * sweep.
-	 */
-	public static final String ACTIVE_EXPIRY_PROPERTY = "redis-adapter.in-memory.sweeper-enabled";
 
 	/**
 	 * Starts the server and publishes the port it bound. The server binds its socket as

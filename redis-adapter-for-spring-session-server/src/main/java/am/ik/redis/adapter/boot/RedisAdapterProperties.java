@@ -8,8 +8,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
 /**
- * Everything an operator sets on the adapter server itself. Backends have properties of
- * their own, under {@code redis-adapter.<backend>}.
+ * Everything an operator sets on the adapter server itself. The backend has properties of
+ * its own, under {@code redis-adapter.<backend>}, declared by the server module built
+ * around it.
  *
  * <p>
  * The defaults are those of the Redis the adapter stands in for, so an application that
@@ -23,9 +24,6 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param bindAddress the address to listen on; the default accepts on every interface,
  * which is what a server in a container wants
  * @param port the port to listen on, {@code 0} for an ephemeral one
- * @param backend which backend holds the session data; the bundled
- * {@value #IN_MEMORY_BACKEND} store is single-node, so a horizontally scaled deployment
- * needs a shared external one
  * @param password the password clients must authenticate with, or {@code null} to let
  * anything that reaches the port read and write every session
  * @param databases how many numbered databases to serve, each an independent keyspace
@@ -35,14 +33,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties(prefix = "redis-adapter")
 public record RedisAdapterProperties(@DefaultValue("0.0.0.0") String bindAddress, @DefaultValue("6379") int port,
-		@DefaultValue(RedisAdapterProperties.IN_MEMORY_BACKEND) String backend, @Nullable String password,
-		@DefaultValue("1") int databases, @DefaultValue("10s") Duration shutdownTimeout, @DefaultValue Ssl ssl) {
-
-	/** The name of the bundled in-memory backend, and the default. */
-	public static final String IN_MEMORY_BACKEND = "in-memory";
-
-	/** The name of the etcd backend, the bundled one that several adapters can share. */
-	public static final String ETCD_BACKEND = "etcd";
+		@Nullable String password, @DefaultValue("1") int databases, @DefaultValue("10s") Duration shutdownTimeout,
+		@DefaultValue Ssl ssl) {
 
 	public RedisAdapterProperties {
 		if (port < 0 || port > 65535) {

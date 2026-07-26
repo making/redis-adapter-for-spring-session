@@ -21,7 +21,7 @@ import org.testcontainers.utility.MountableFile;
  *
  * <p>
  * The adapter is started from its runnable jar on a plain JRE image, which is what
- * {@code java -jar redis-adapter-for-spring-session-server-<version>-exec.jar} does on a
+ * {@code java -jar redis-adapter-for-spring-session-server-etcd-<version>-exec.jar} does on a
  * server. Maven puts the jar under {@code target/adapter/} before the tests run
  * ({@code maven-dependency-plugin} in {@code pom.xml}), so what is tested is a published
  * artifact rather than a class path assembled here.
@@ -85,7 +85,6 @@ final class SessionStoreContainers {
 		return new GenericContainer<>(JRE_IMAGE).withNetwork(NETWORK)
 			.withExposedPorts(REDIS_PORT)
 			.withCopyFileToContainer(MountableFile.forHostPath(serverJar()), "/opt/redis-adapter-server.jar")
-			.withEnv("REDIS_ADAPTER_BACKEND", "etcd")
 			.withEnv("REDIS_ADAPTER_ETCD_ENDPOINTS", "http://" + ETCD_ALIAS + ":2379")
 			.withCommand("java", "-jar", "/opt/redis-adapter-server.jar")
 			.waitingFor(Wait.forLogMessage(".*Redis adapter server listening on.*", 1))

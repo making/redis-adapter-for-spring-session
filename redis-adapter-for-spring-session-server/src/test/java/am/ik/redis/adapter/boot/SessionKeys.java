@@ -17,12 +17,12 @@ import static java.nio.charset.StandardCharsets.UTF_8;
  *
  * @param namespace the namespace as an application writes it, with no trailing colon
  */
-record SessionKeys(String namespace) {
+public record SessionKeys(String namespace) {
 
 	/** The namespace Spring Session uses when an application names none. */
-	static final SessionKeys DEFAULT = new SessionKeys("spring:session");
+	public static final SessionKeys DEFAULT = new SessionKeys("spring:session");
 
-	SessionKeys {
+	public SessionKeys {
 		if (namespace.isBlank() || namespace.endsWith(":")) {
 			throw new IllegalArgumentException(
 					"the namespace is written as an application writes it, with no trailing colon: " + namespace);
@@ -34,7 +34,7 @@ record SessionKeys(String namespace) {
 	 * @param sessionId the session id
 	 * @return the session key
 	 */
-	byte[] session(String sessionId) {
+	public byte[] session(String sessionId) {
 		return bytes(this.namespace + ":sessions:" + sessionId);
 	}
 
@@ -44,7 +44,7 @@ record SessionKeys(String namespace) {
 	 * @param sessionId the session id
 	 * @return the shadow key
 	 */
-	byte[] shadow(String sessionId) {
+	public byte[] shadow(String sessionId) {
 		return bytes(this.namespace + ":sessions:expires:" + sessionId);
 	}
 
@@ -53,7 +53,7 @@ record SessionKeys(String namespace) {
 	 * @param principal the principal name
 	 * @return the principal index key
 	 */
-	byte[] principalIndex(String principal) {
+	public byte[] principalIndex(String principal) {
 		return bytes(this.namespace + ":index:" + FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME + ":"
 				+ principal);
 	}
@@ -65,7 +65,7 @@ record SessionKeys(String namespace) {
 	 * @return the expirations key, as a string because it is written through
 	 * {@code RedisOperations} rather than read off the backend
 	 */
-	String expirations(long bucket) {
+	public String expirations(long bucket) {
 		return this.namespace + ":expirations:" + bucket;
 	}
 
@@ -77,7 +77,7 @@ record SessionKeys(String namespace) {
 	 * @return the expirations sorted-set key, as a string because it is queried through
 	 * {@code RedisOperations}
 	 */
-	String expirationsSortedSet() {
+	public String expirationsSortedSet() {
 		return this.namespace + ":sessions:expirations";
 	}
 
@@ -85,7 +85,7 @@ record SessionKeys(String namespace) {
 	 * Returns {@link #expirationsSortedSet()} as the backend sees it.
 	 * @return the expirations sorted-set key in bytes
 	 */
-	byte[] expirationsSortedSetKey() {
+	public byte[] expirationsSortedSetKey() {
 		return bytes(expirationsSortedSet());
 	}
 
@@ -96,7 +96,7 @@ record SessionKeys(String namespace) {
 	 * @param database the database the application's connection selected
 	 * @return the created-channel prefix, the session id being its suffix
 	 */
-	String createdChannelPrefix(int database) {
+	public String createdChannelPrefix(int database) {
 		return this.namespace + ":event:" + database + ":created:";
 	}
 

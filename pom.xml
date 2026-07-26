@@ -16,6 +16,8 @@
 		<module>redis-adapter-for-spring-session-inmemory</module>
 		<module>redis-adapter-for-spring-session-etcd</module>
 		<module>redis-adapter-for-spring-session-server</module>
+		<module>redis-adapter-for-spring-session-server-inmemory</module>
+		<module>redis-adapter-for-spring-session-server-etcd</module>
 	</modules>
 
 	<properties>
@@ -77,10 +79,12 @@
 	</dependencyManagement>
 
 	<profiles>
-		<!-- ./mvnw test -Pperformance -pl redis-adapter-for-spring-session-server
-		     Runs only the performance harness, against a real etcd in a container. It measures
-		     and reports; it asserts almost nothing, so a failure here means the harness could
-		     not run rather than that a backend got slower. -->
+		<!-- ./mvnw test -Pperformance
+		     Runs only the performance harness. Each server module measures its own backend, so
+		     the etcd numbers come from the etcd module and the in-memory baseline they are read
+		     against from the in-memory one. It measures and reports; it asserts almost nothing,
+		     so a failure here means the harness could not run rather than that a backend got
+		     slower. -->
 		<profile>
 			<id>performance</id>
 			<properties>

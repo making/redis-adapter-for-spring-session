@@ -5,13 +5,10 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.time.Duration;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import am.ik.redis.adapter.etcd.EtcdKeyValueStore;
-import am.ik.redis.adapter.inmemory.InMemoryKeyValueStore;
 import am.ik.redis.adapter.server.RedisAdapterServer;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -19,8 +16,10 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.ssl.SslAutoConfiguration;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.assertj.AssertableApplicationContext;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.env.SystemEnvironmentPropertySource;
 import org.springframework.core.io.ClassPathResource;
@@ -45,6 +44,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * adapter listens on, and where the certificate material is. Those are substituted here,
  * by key, and the substitution fails if the key it names is no longer in the example.
  * Everything else is used exactly as it is written.
+ *
+ * <p>
+ * These are the settings every adapter server takes, so the server runs on this module's
+ * own test backend. What a backend is given is run the same way, in that backend's server
+ * module, against that backend.
  */
 class ReadmeConfigurationExamplesTests {
 
@@ -81,8 +85,7 @@ class ReadmeConfigurationExamplesTests {
 
 		adapter(substituted(settings, Map.of("redis-adapter.bind-address", "127.0.0.1", "redis-adapter.port", "0")))
 			.run(server -> {
-				assertThat(server.getBean(KeyValueStores.class).databases()).hasSize(1)
-					.allSatisfy(store -> assertThat(store).isInstanceOf(InMemoryKeyValueStore.class));
+				assertThat(server.getBean(KeyValueStores.class).databases()).hasSize(1);
 
 				Map<String, String> connection = substituted(settings(APPLICATION, "app-connection"), address(server));
 				client(connection).run(application -> assertThatThrownBy(() -> ping(application))
@@ -91,14 +94,6 @@ class ReadmeConfigurationExamplesTests {
 				client(merged(connection, settings(APPLICATION, "app-password")))
 					.run(application -> assertThat(ping(application)).isEqualTo("PONG"));
 			});
-	}
-
-	@Test
-	void theInMemoryBackendExampleConfiguresTheBundledBackend() {
-		adapter(merged(Map.of("redis-adapter.bind-address", "127.0.0.1", "redis-adapter.port", "0"),
-				settings(SERVER, "server-in-memory")))
-			.run(server -> assertThat(server.getBean(InMemoryBackendProperties.class))
-				.isEqualTo(new InMemoryBackendProperties(true, Duration.ofSeconds(1))));
 	}
 
 	/**
@@ -111,52 +106,16 @@ class ReadmeConfigurationExamplesTests {
 	void theEnvironmentExampleConfiguresTheServerThroughEnvironmentVariables() {
 		Map<String, Object> environment = new HashMap<>(settings(ENVIRONMENT, "server-env"));
 
-		new ApplicationContextRunner().withUserConfiguration(KeyValueStoreConfiguration.class)
+		new ApplicationContextRunner().withUserConfiguration(ServerProperties.class)
 			.withInitializer(context -> context.getEnvironment()
 				.getPropertySources()
 				.addFirst(new SystemEnvironmentPropertySource(
 						StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME, environment)))
-			.run(context -> {
-				assertThat(context.getBean(RedisAdapterProperties.class)).satisfies(properties -> {
-					assertThat(properties.port()).isEqualTo(16379);
-					assertThat(properties.password()).isEqualTo("s3cret");
-					assertThat(properties.databases()).isEqualTo(16);
-				});
-				assertThat(context.getBean(InMemoryBackendProperties.class).sweepInterval())
-					.isEqualTo(Duration.ofSeconds(5));
-				// A list from one variable, which is the shape a container platform can
-				// hand over and the one an operator is most likely to get wrong.
-				assertThat(context.getBean(EtcdBackendProperties.class).endpoints())
-					.containsExactly("http://etcd-0:2379", "http://etcd-1:2379");
-			});
-	}
-
-	/**
-	 * The etcd example, bound rather than connected to: it names a cluster that is not
-	 * there, and it must still be the etcd backend that the server would go looking for
-	 * it with. What that backend then does against a real etcd is
-	 * {@link EtcdBackendEndToEndTests}.
-	 */
-	@Test
-	void theEtcdExampleSelectsTheEtcdBackendAndPointsItAtTheCluster() {
-		Map<String, String> settings = settings(SERVER, "server-etcd");
-
-		new ApplicationContextRunner().withUserConfiguration(KeyValueStoreConfiguration.class)
-			.withPropertyValues(settings.entrySet()
-				.stream()
-				.map(entry -> entry.getKey() + "=" + entry.getValue())
-				.toArray(String[]::new))
-			.run(context -> {
-				assertThat(context.getBean(RedisAdapterProperties.class).backend())
-					.isEqualTo(RedisAdapterProperties.ETCD_BACKEND);
-				assertThat(context.getBean(EtcdBackendProperties.class)).satisfies(etcd -> {
-					assertThat(etcd.endpoints()).containsExactly("http://etcd-0:2379", "http://etcd-1:2379",
-							"http://etcd-2:2379");
-					assertThat(etcd.keyPrefix(0)).isEqualTo("/redis-adapter/0/");
-				});
-				assertThat(context.getBean(KeyValueStores.class).databases()).hasSize(1)
-					.allSatisfy(store -> assertThat(store).isInstanceOf(EtcdKeyValueStore.class));
-			});
+			.run(context -> assertThat(context.getBean(RedisAdapterProperties.class)).satisfies(properties -> {
+				assertThat(properties.port()).isEqualTo(16379);
+				assertThat(properties.password()).isEqualTo("s3cret");
+				assertThat(properties.databases()).isEqualTo(16);
+			}));
 	}
 
 	/**
@@ -188,8 +147,10 @@ class ReadmeConfigurationExamplesTests {
 	 * @return the runner
 	 */
 	private ApplicationContextRunner adapter(Map<String, String> settings) {
-		return new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(SslAutoConfiguration.class))
-			.withUserConfiguration(KeyValueStoreConfiguration.class, RedisAdapterServerConfiguration.class)
+		return new ApplicationContextRunner()
+			.withConfiguration(
+					AutoConfigurations.of(SslAutoConfiguration.class, RedisAdapterServerAutoConfiguration.class))
+			.withUserConfiguration(TestBackendConfiguration.class)
 			.withPropertyValues(pairs(settings));
 	}
 
@@ -264,6 +225,16 @@ class ReadmeConfigurationExamplesTests {
 
 	private String file(String name) {
 		return "file:" + this.certificates.resolve(name);
+	}
+
+	/**
+	 * The server's settings, bound and nothing more. The environment example is about how
+	 * a variable is spelt, so it must not start a server on the port it names.
+	 */
+	@Configuration(proxyBeanMethods = false)
+	@EnableConfigurationProperties(RedisAdapterProperties.class)
+	static class ServerProperties {
+
 	}
 
 }

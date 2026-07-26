@@ -1,14 +1,16 @@
 package am.ik.redis.adapter.boot;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.io.StringReader;
+import java.io.UncheckedIOException;
+import java.lang.reflect.RecordComponent;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Matcher;
@@ -35,6 +37,8 @@ public final class ReadmeSnippets {
 	 * The README, from the directory a test runs in, which is the module's own.
 	 */
 	public static final Path README = Path.of("..", "README.md");
+
+	private static final Pattern MARKER = Pattern.compile("<!--\\s*(\\S+)\\s*-->");
 
 	private static final Pattern SNIPPET_MARKER = Pattern.compile("<!--\\s*snippet:(\\S+)\\s*-->");
 
@@ -164,19 +168,6 @@ public final class ReadmeSnippets {
 	}
 
 	/**
-	 * Reads a region of a properties file as the pairs a Spring test is configured with.
-	 * @param resource the class path resource the region lives in
-	 * @param name the name of the region
-	 * @return the settings, as {@code key=value}
-	 */
-	public static String[] settingPairs(String resource, String name) {
-		return settings(resource, name).entrySet()
-			.stream()
-			.map(setting -> setting.getKey() + "=" + setting.getValue())
-			.toArray(String[]::new);
-	}
-
-	/**
 	 * Returns the first cell of every row of the table that follows the given marker.
 	 * @param marker the HTML comment the table is introduced by, without its brackets
 	 * @return the cells, header and separator rows left out
@@ -205,6 +196,56 @@ public final class ReadmeSnippets {
 		}
 		// The first two rows are the heading and the separator under it.
 		return rows.subList(2, rows.size()).stream().map(row -> row.split("\\|")[1].trim()).toList();
+	}
+
+	/**
+	 * Returns the names of every marker the README carries that begins with the given
+	 * prefix, which is how a module finds the tables it is not itself the owner of.
+	 * @param prefix what the marker names start with, {@code properties:} say
+	 * @return the marker names, brackets and comment syntax left out
+	 */
+	public static List<String> markers(String prefix) {
+		return readme().lines()
+			.map(MARKER::matcher)
+			.filter(Matcher::matches)
+			.map(marker -> marker.group(1))
+			.filter(name -> name.startsWith(prefix))
+			.toList();
+	}
+
+	/**
+	 * Returns the property names a configuration table documents, which is the first cell
+	 * of each of its rows written as code.
+	 * @param marker the HTML comment the table is introduced by, without its brackets
+	 * @return the properties the README says are bound
+	 */
+	public static List<String> documentedProperties(String marker) {
+		return tableRowHeadings(marker).stream().flatMap(cell -> codeSpans(cell).stream()).toList();
+	}
+
+	/**
+	 * Returns the names a properties record binds, the nested ones included, the way an
+	 * operator writes them.
+	 * @param prefix the prefix the record is bound under
+	 * @param properties the record to walk
+	 * @return the property names
+	 */
+	public static List<String> boundProperties(String prefix, Class<?> properties) {
+		List<String> names = new ArrayList<>();
+		for (RecordComponent component : properties.getRecordComponents()) {
+			String name = prefix + "." + kebabCase(component.getName());
+			if (component.getType().isRecord()) {
+				names.addAll(boundProperties(name, component.getType()));
+			}
+			else {
+				names.add(name);
+			}
+		}
+		return names;
+	}
+
+	private static String kebabCase(String name) {
+		return name.replaceAll("([a-z0-9])([A-Z])", "$1-$2").toLowerCase(Locale.ROOT);
 	}
 
 	/**

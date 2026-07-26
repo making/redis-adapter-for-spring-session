@@ -2,10 +2,8 @@ package com.example.backend;
 
 import java.time.Duration;
 
-import am.ik.redis.adapter.boot.KeyValueStoreConfiguration;
 import am.ik.redis.adapter.boot.KeyValueStores;
-import am.ik.redis.adapter.boot.ReadmeSnippets;
-import am.ik.redis.adapter.boot.RedisAdapterServerConfiguration;
+import am.ik.redis.adapter.boot.RedisAdapterServerAutoConfiguration;
 import am.ik.redis.adapter.server.RedisAdapterServer;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
@@ -13,32 +11,35 @@ import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.StringCodec;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Runs the backend example the README shows: a module contributing one
- * {@link MyKeyValueStoreFactory} bean, selected by the name it answers to.
+ * Runs the backend example the README shows: a server module of somebody else's,
+ * contributing one {@link MyKeyValueStoreFactory} bean and nothing more.
  *
  * <p>
  * A real client writes through the running server, so what is asserted is that the
- * sessions of an application would land in the backend that was chosen — not merely that
- * a bean of the right type exists. Two databases are served, since a backend has to keep
- * them apart and the README says so.
+ * sessions of an application would land in that backend — not merely that a bean of the
+ * right type exists. Two databases are served, since a backend has to keep them apart and
+ * the README says so.
  */
 class ReadmeBackendExampleTests {
 
 	private final ApplicationContextRunner runner = new ApplicationContextRunner()
-		.withUserConfiguration(KeyValueStoreConfiguration.class, RedisAdapterServerConfiguration.class,
-				MyBackendConfiguration.class)
-		.withPropertyValues("redis-adapter.bind-address=127.0.0.1", "redis-adapter.port=0", "redis-adapter.databases=2")
-		// The one setting that selects this backend is the README's own.
-		.withPropertyValues(ReadmeSnippets.settingPairs("readme/server.properties", "backend-selection"));
+		.withConfiguration(AutoConfigurations.of(RedisAdapterServerAutoConfiguration.class))
+		// The whole of what the example's own module adds. Nothing selects it: it is the
+		// only backend on the class path, which is what building a server around it
+		// means.
+		.withUserConfiguration(MyBackendConfiguration.class)
+		.withPropertyValues("redis-adapter.bind-address=127.0.0.1", "redis-adapter.port=0",
+				"redis-adapter.databases=2");
 
 	@Test
-	void theBackendExampleTakesOverFromTheBundledOne() {
+	void theBackendExampleIsTheBackendTheServerWritesTo() {
 		this.runner.run(context -> {
 			KeyValueStores databases = context.getBean(KeyValueStores.class);
 			assertThat(databases.databases()).hasSize(2)

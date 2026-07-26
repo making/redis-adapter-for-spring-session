@@ -46,8 +46,8 @@ class RedisAdapterServerTlsConfigurationTests {
 	 * verified against.
 	 */
 	private final ApplicationContextRunner runner = new ApplicationContextRunner()
-		.withConfiguration(AutoConfigurations.of(SslAutoConfiguration.class))
-		.withUserConfiguration(KeyValueStoreConfiguration.class, RedisAdapterServerConfiguration.class)
+		.withConfiguration(AutoConfigurations.of(SslAutoConfiguration.class, RedisAdapterServerAutoConfiguration.class))
+		.withUserConfiguration(TestBackendConfiguration.class)
 		.withPropertyValues("redis-adapter.bind-address=127.0.0.1", "redis-adapter.port=0",
 				"spring.ssl.bundle.pem.adapter.keystore.certificate=classpath:tls/server.crt",
 				"spring.ssl.bundle.pem.adapter.keystore.private-key=classpath:tls/server.key",

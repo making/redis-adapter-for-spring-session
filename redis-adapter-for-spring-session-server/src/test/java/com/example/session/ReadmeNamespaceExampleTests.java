@@ -3,6 +3,7 @@ package com.example.session;
 import java.util.function.Consumer;
 
 import am.ik.redis.adapter.boot.AdapterServerTestConfiguration;
+import am.ik.redis.adapter.boot.TestBackendConfiguration;
 import am.ik.redis.adapter.boot.KeyValueStores;
 import am.ik.redis.adapter.boot.ReadmeSnippets;
 import org.junit.jupiter.api.Test;
@@ -84,7 +85,7 @@ class ReadmeNamespaceExampleTests {
 	 * talks to started beside it.
 	 */
 	@EnableAutoConfiguration
-	@Import(AdapterServerTestConfiguration.class)
+	@Import({ AdapterServerTestConfiguration.class, TestBackendConfiguration.class, TestBackendConfiguration.class })
 	static class Application {
 
 	}

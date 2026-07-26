@@ -3,6 +3,7 @@ package com.example.session;
 import java.util.function.Consumer;
 
 import am.ik.redis.adapter.boot.AdapterServerTestConfiguration;
+import am.ik.redis.adapter.boot.TestBackendConfiguration;
 import am.ik.redis.adapter.boot.KeyValueStores;
 import am.ik.redis.adapter.boot.ReadmeSnippets;
 import am.ik.redis.adapter.store.RedisValue;
@@ -86,7 +87,7 @@ class ReadmeSortedSetExpirationExampleTests {
 	 * how expirations are recorded.
 	 */
 	@EnableAutoConfiguration
-	@Import({ SortedSetExpirationConfig.class, AdapterServerTestConfiguration.class })
+	@Import({ SortedSetExpirationConfig.class, AdapterServerTestConfiguration.class, TestBackendConfiguration.class })
 	static class Application {
 
 	}

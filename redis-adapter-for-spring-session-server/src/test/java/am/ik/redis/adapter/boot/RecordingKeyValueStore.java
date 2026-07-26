@@ -1,5 +1,6 @@
 package am.ik.redis.adapter.boot;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -11,32 +12,58 @@ import am.ik.redis.adapter.store.RedisValue;
 import org.jspecify.annotations.Nullable;
 
 /**
- * A backend of the kind a module outside this project would contribute: it satisfies the
- * SPI by doing the work through the bundled store, and it remembers the database it was
- * created for and whether it was closed.
+ * The backend this module's own tests run on: it satisfies the SPI by doing the work
+ * through the in-memory store, and it remembers the database it was created for and
+ * whether it was closed.
  *
  * <p>
  * Those two things are what the backend seam promises and what nothing else can observe —
  * that each database gets a store of its own, and that a backend holding a resource is
  * given the chance to let go of it when the application shuts down.
+ *
+ * <p>
+ * A server has to have a backend to serve anything, and this module deliberately ships
+ * none, so the tests bring their own. It is also the shape a backend written outside this
+ * project has: a store, and a factory that hands out one per database.
  */
-final class RecordingKeyValueStore implements KeyValueStore {
+public final class RecordingKeyValueStore implements KeyValueStore {
 
-	private final KeyValueStore delegate = InMemoryKeyValueStore.create();
+	/**
+	 * How long an expired key nobody touches may sit there. Short, because tests wait for
+	 * it.
+	 */
+	private static final Duration SWEEP_INTERVAL = Duration.ofMillis(50);
+
+	private final KeyValueStore delegate;
 
 	private final int databaseIndex;
 
 	private final AtomicBoolean closed = new AtomicBoolean();
 
-	RecordingKeyValueStore(int databaseIndex) {
+	public RecordingKeyValueStore(int databaseIndex) {
+		this(databaseIndex, true);
+	}
+
+	/**
+	 * Creates the store of one database.
+	 * @param databaseIndex the database number it is created for
+	 * @param sweeperEnabled whether keys whose time has passed are swept in the
+	 * background, which a test turns off to prove a key dies of the access that touches
+	 * it
+	 */
+	public RecordingKeyValueStore(int databaseIndex, boolean sweeperEnabled) {
 		this.databaseIndex = databaseIndex;
+		this.delegate = InMemoryKeyValueStore.builder()
+			.sweeperEnabled(sweeperEnabled)
+			.sweepInterval(SWEEP_INTERVAL)
+			.build();
 	}
 
 	/**
 	 * Returns the database this store was created for.
 	 * @return the database number it was asked for
 	 */
-	int databaseIndex() {
+	public int databaseIndex() {
 		return this.databaseIndex;
 	}
 
@@ -44,7 +71,7 @@ final class RecordingKeyValueStore implements KeyValueStore {
 	 * Reports whether this store has been closed.
 	 * @return {@code true} once {@link #close()} has been called
 	 */
-	boolean isClosed() {
+	public boolean isClosed() {
 		return this.closed.get();
 	}
 

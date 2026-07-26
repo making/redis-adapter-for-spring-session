@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.function.Consumer;
 
 import am.ik.redis.adapter.boot.AdapterServerTestConfiguration;
+import am.ik.redis.adapter.boot.TestBackendConfiguration;
 import am.ik.redis.adapter.boot.ReadmeSnippets;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -128,7 +129,8 @@ class ReadmeIndexedModeExampleTests {
 	 * The application of the README, with the adapter it talks to started beside it.
 	 */
 	@EnableAutoConfiguration
-	@Import({ SessionEventListener.class, ActiveUserSessions.class, AdapterServerTestConfiguration.class })
+	@Import({ SessionEventListener.class, ActiveUserSessions.class, AdapterServerTestConfiguration.class,
+			TestBackendConfiguration.class })
 	static class Application {
 
 	}

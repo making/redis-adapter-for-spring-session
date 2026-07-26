@@ -247,7 +247,7 @@ class IndexedSessionEndToEndTests {
 
 	@EnableAutoConfiguration
 	@EnableRedisIndexedHttpSession(cleanupCron = Scheduled.CRON_DISABLED)
-	@Import(AdapterServerTestConfiguration.class)
+	@Import({ AdapterServerTestConfiguration.class, TestBackendConfiguration.class, TestBackendConfiguration.class })
 	static class SessionApplication {
 
 		@Bean

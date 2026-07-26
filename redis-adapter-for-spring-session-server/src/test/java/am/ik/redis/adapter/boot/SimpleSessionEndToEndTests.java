@@ -173,7 +173,7 @@ class SimpleSessionEndToEndTests {
 
 	@EnableAutoConfiguration
 	@EnableRedisHttpSession
-	@Import(AdapterServerTestConfiguration.class)
+	@Import({ AdapterServerTestConfiguration.class, TestBackendConfiguration.class, TestBackendConfiguration.class })
 	static class SessionApplication {
 
 	}

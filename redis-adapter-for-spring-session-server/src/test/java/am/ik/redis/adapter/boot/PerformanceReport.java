@@ -22,7 +22,7 @@ import java.util.Map;
  * Sections keep the tables apart — one per backend, or one per concern — in the order
  * they were measured.
  */
-final class PerformanceReport {
+public final class PerformanceReport {
 
 	private final String title;
 
@@ -30,7 +30,7 @@ final class PerformanceReport {
 
 	private final List<String> notes = new ArrayList<>();
 
-	PerformanceReport(String title) {
+	public PerformanceReport(String title) {
 		this.title = title;
 	}
 
@@ -39,7 +39,7 @@ final class PerformanceReport {
 	 * @param section the heading it belongs under
 	 * @param measurement what was measured
 	 */
-	void add(String section, Measurement measurement) {
+	public void add(String section, Measurement measurement) {
 		section(section, Measurement.MARKDOWN_HEADER).rows().add(measurement.markdownRow());
 	}
 
@@ -50,7 +50,7 @@ final class PerformanceReport {
 	 * @param header the markdown header the section's table uses, used on first row only
 	 * @param row the row
 	 */
-	void row(String section, String header, String row) {
+	public void row(String section, String header, String row) {
 		section(section, header).rows().add(row);
 	}
 
@@ -59,7 +59,7 @@ final class PerformanceReport {
 	 * refusal said.
 	 * @param note the line to keep
 	 */
-	void note(String note) {
+	public void note(String note) {
 		this.notes.add(note);
 	}
 
@@ -67,7 +67,7 @@ final class PerformanceReport {
 	 * Returns the whole report as markdown.
 	 * @return the report
 	 */
-	String markdown() {
+	public String markdown() {
 		StringBuilder markdown = new StringBuilder("## ").append(this.title).append("\n");
 		for (String note : this.notes) {
 			markdown.append("\n").append(note).append("\n");
@@ -85,7 +85,7 @@ final class PerformanceReport {
 	 * Writes the report to {@code target/performance/<file>} and prints it.
 	 * @param file the file name, without a directory
 	 */
-	void write(String file) {
+	public void write(String file) {
 		String markdown = markdown();
 		System.out.println(markdown);
 		Path path = Path.of("target", "performance", file);

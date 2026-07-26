@@ -42,7 +42,7 @@ import static org.awaitility.Awaitility.await;
  * job's cron is switched off too, so the only run of it is the one the test asks for.
  */
 @SpringBootTest(classes = IndexedSessionCleanupEndToEndTests.SessionApplication.class,
-		properties = AdapterServerTestConfiguration.ACTIVE_EXPIRY_PROPERTY + "=false")
+		properties = TestBackendConfiguration.ACTIVE_EXPIRY_PROPERTY + "=false")
 class IndexedSessionCleanupEndToEndTests {
 
 	private static final long MILLIS_PER_MINUTE = Duration.ofMinutes(1).toMillis();
@@ -117,7 +117,7 @@ class IndexedSessionCleanupEndToEndTests {
 
 	@EnableAutoConfiguration
 	@EnableRedisIndexedHttpSession(cleanupCron = Scheduled.CRON_DISABLED)
-	@Import(AdapterServerTestConfiguration.class)
+	@Import({ AdapterServerTestConfiguration.class, TestBackendConfiguration.class, TestBackendConfiguration.class })
 	static class SessionApplication {
 
 		@Bean

@@ -177,41 +177,62 @@ Multi-module Maven (parent = current artifact, packaging `pom`):
   pubsub / server layers in §3, but **not** a concrete backend. **Runtime deps: only
   `slf4j-api` + `jspecify`.** Test deps: JUnit 5, AssertJ, ArchUnit. No Netty, no Spring on
   the main classpath.
-- **`redis-adapter-for-spring-session-inmemory`** — the bundled in-memory reference backend
+- **`redis-adapter-for-spring-session-inmemory`** — the in-memory reference backend
   (`am.ik.redis.adapter.inmemory.InMemoryKeyValueStore`: `ConcurrentHashMap` + TTL +
   passive/active expiry). **Depends only on `core`; runtime deps only `slf4j-api` +
   `jspecify`.** It implements the `KeyValueStore` SPI from outside `core`, exactly like a
   future external backend, so the seam is exercised for real rather than trusted. Test deps
   are only JUnit 5 + AssertJ (backend unit tests); the full-stack end-to-end tests live in
   the `server` module (below), keeping this module a light, dependency-minimal backend.
-- **`redis-adapter-for-spring-session-server`** — Spring Boot application that depends on
-  `core` + `inmemory` and wires the in-memory backend as the default:
-  `@ConfigurationProperties` (bind address, port, backend selection, default TTL, optional
-  auth, DB count), a `SmartLifecycle` bean that starts/stops `RedisAdapterServer`, actuator
-  health/metrics, runnable jar. **This module intentionally depends on Spring Boot** — the
-  "no external dependencies" rule applies to the reusable core, not to the runnable server
-  (the deliberate trade-off chosen for the server). It also **hosts the end-to-end
-  compatibility tests** (test-scoped Lettuce + Spring Session + Spring Boot Test): they boot
-  the server backed by the in-memory store and drive it through a real Lettuce client
-  running stock Spring Session. E2E belongs here because this module already has every
-  dependency (core, the backend, Spring Boot) and is the runnable application; `core` cannot
-  host them — it has no concrete backend, and a test dependency from `core` onto a backend
-  module would create a Maven reactor cycle.
-
 - **`redis-adapter-for-spring-session-etcd`** — the etcd backend (§11), added 2026-07-25.
   Depends on `core` only, exactly as `inmemory` does, and has the same runtime deps
   (`slf4j-api` + `jspecify`): it speaks etcd's v3 API as JSON over the gRPC gateway with the
   JDK's `HttpClient`, so no gRPC stack, protobuf or Netty reaches the server. Test deps add
   Testcontainers, because the backend is only worth anything if it works against a real
-  etcd. The Spring Boot side of it (`EtcdBackendProperties`,
-  `EtcdKeyValueStoreFactory`) lives in the `server` module, exactly like the in-memory
-  backend's, since `KeyValueStoreFactory` is a Spring concept and a package is never split
-  across two modules.
+  etcd.
+- **`redis-adapter-for-spring-session-server`** — everything the Spring Boot server is
+  **except** a backend: `RedisAdapterProperties` (bind address, port, optional auth, DB
+  count, TLS), `RedisAdapterServerAutoConfiguration` registered through
+  `AutoConfiguration.imports`, a `SmartLifecycle` bean that starts/stops
+  `RedisAdapterServer`, actuator health/metrics, and the `KeyValueStoreFactory` SPI.
+  **Depends on `core` + Spring Boot and on no backend** — the "no external dependencies"
+  rule applies to the reusable core, not to the runnable server (the deliberate trade-off
+  chosen for the server). It produces no runnable jar. It **hosts the end-to-end
+  compatibility tests** (test-scoped Lettuce + Spring Session + Spring Boot Test): they boot
+  the server on a test-local backend and drive it through a real Lettuce client running
+  stock Spring Session. E2E belongs here because the surface they exercise is this module's
+  and the backend under it is a fixture; `core` cannot host them — it has no concrete
+  backend, and a test dependency from `core` onto a backend module would create a Maven
+  reactor cycle. The test sources are published as a **`test-jar`**, so the harness
+  (`AdapterServerTestConfiguration`, `SessionKeys`, `ReadmeSnippets`, `BackendSpiBenchmark`,
+  `SessionPerformanceHarness`, `CallCounter`, the TLS material) is what every server module
+  is proven with, including one built outside this repository.
+- **`redis-adapter-for-spring-session-server-<backend>`** — the runnable server around one
+  backend, one module per store: `<Backend>BackendProperties`,
+  `<Backend>KeyValueStoreFactory`, `<Backend>BackendConfiguration` and a
+  `@SpringBootApplication`, in `am.ik.redis.adapter.boot.<backend>`, producing the `exec`
+  jar. `-server-inmemory` and `-server-etcd` are the two here. The Spring side of a backend
+  lives with the server rather than with the store because `KeyValueStoreFactory` is a
+  Spring concept and the store module has no Spring on it.
 
-Dependency direction is strictly acyclic: `inmemory → core`, `etcd → core`, and
-`server → core` + `server → inmemory` + `server → etcd`. Every KVS backend — the bundled in-memory one and any future external
-one — depends on `core` only and implements `KeyValueStore`; the in-memory backend is
-deliberately a peer of those future backends rather than a privileged part of `core`.
+  This split, made 2026-07-26, is what the server module exists for. The alternative — one
+  server aggregating every backend, choosing between them by `redis-adapter.backend` — makes
+  supporting a store whose driver cannot be published (Gemfire, say) impossible without
+  forking: the aggregate has to name it. With a server per store the aggregation is gone,
+  the property is gone with it, and a private module of exactly this shape, depending on the
+  released `-server` artifact, is a first-class server. `RedisAdapterServerAutoConfiguration`
+  therefore requires **exactly one** `KeyValueStoreFactory` bean and refuses to start on any
+  other number: which jar is running *is* the choice, so there is nothing left to decide at
+  deploy time and nothing for an ahead-of-time image to settle in advance.
+
+Dependency direction is strictly acyclic and, after the 2026-07-26 split, has no edge from
+the server to a backend at all: `inmemory → core`, `etcd → core`, `server → core`, and
+`server-<backend> → server` + `server-<backend> → <backend>`. Every KVS backend — the
+in-memory one and any external one — depends on `core` only and implements `KeyValueStore`;
+the in-memory backend is deliberately a peer of those other backends rather than a
+privileged part of `core`, and its server is a peer of theirs rather than a privileged part
+of `server`. The only edge from `server` to a backend is `server → inmemory` in **test**
+scope, because a server with no store cannot serve anything and its tests need one.
 
 > Decision (2026-07-24): the in-memory backend was moved out of `core` into its own
 > `-inmemory` module for the reasons above. Naming: module
@@ -524,9 +545,11 @@ the watch thread starts.
 ### 11.6 What it costs (measured 2026-07-25)
 
 Correctness was proved first and the cost measured afterwards;
-`.docs/design/etcd-performance.md` is that measurement, taken by a harness in the server
-module that is excluded from an ordinary build (`./mvnw test -Pperformance -pl
-redis-adapter-for-spring-session-server`). Three numbers from it belong in the design itself,
+`.docs/design/etcd-performance.md` is that measurement, taken by a harness that is excluded
+from an ordinary build (`./mvnw test -Pperformance`). The shared cases live in the server
+module's `BackendSpiBenchmark` and each server module runs them against its own backend, so
+the etcd numbers are read against the in-memory ones. Three numbers from it belong in the
+design itself,
 because they are the design's own consequences rather than one machine's:
 
 - **A session save is 6 raft writes**, one per key written, because the three `PEXPIREAT`s

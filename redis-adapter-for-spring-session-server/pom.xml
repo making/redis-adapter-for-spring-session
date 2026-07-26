@@ -12,22 +12,12 @@
 
 	<artifactId>redis-adapter-for-spring-session-server</artifactId>
 	<name>redis-adapter-for-spring-session-server</name>
-	<description>Spring Boot server that runs the Redis adapter for Spring Session</description>
+	<description>Everything the Redis adapter server is except the backend it stores sessions in</description>
 
 	<dependencies>
 		<dependency>
 			<groupId>am.ik.redis</groupId>
 			<artifactId>redis-adapter-for-spring-session-core</artifactId>
-			<version>${project.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>am.ik.redis</groupId>
-			<artifactId>redis-adapter-for-spring-session-inmemory</artifactId>
-			<version>${project.version}</version>
-		</dependency>
-		<dependency>
-			<groupId>am.ik.redis</groupId>
-			<artifactId>redis-adapter-for-spring-session-etcd</artifactId>
 			<version>${project.version}</version>
 		</dependency>
 		<dependency>
@@ -44,6 +34,16 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-web</artifactId>
+		</dependency>
+		<!-- A server with no backend serves nothing, so the tests need one, and the bundled
+		     in-memory store is the cheapest thing that is a real backend. It is the store
+		     rather than the Spring wiring around it: the wiring lives in the server module of
+		     that backend, which depends on this one. -->
+		<dependency>
+			<groupId>am.ik.redis</groupId>
+			<artifactId>redis-adapter-for-spring-session-inmemory</artifactId>
+			<version>${project.version}</version>
+			<scope>test</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -65,18 +65,6 @@
 			<artifactId>spring-boot-starter-session-data-redis</artifactId>
 			<scope>test</scope>
 		</dependency>
-		<!-- The etcd backend is only documented as working because a Spring Session
-		     application is driven against a real etcd, in a container, from here. -->
-		<dependency>
-			<groupId>org.testcontainers</groupId>
-			<artifactId>testcontainers</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.testcontainers</groupId>
-			<artifactId>testcontainers-junit-jupiter</artifactId>
-			<scope>test</scope>
-		</dependency>
 	</dependencies>
 
 	<build>
@@ -90,22 +78,27 @@
 				<groupId>io.spring.javaformat</groupId>
 				<artifactId>spring-javaformat-maven-plugin</artifactId>
 			</plugin>
-			<!-- The runnable server is attached under the "exec" classifier so that the plain
-			     jar stays a jar: its configuration classes are also usable from an application
-			     that would rather run the adapter inside itself. -->
+			<!-- The test sources are published as well. They hold the harness a backend is
+			     driven with - the shipped configuration under a real Lettuce client, the key
+			     names Spring Session writes, the benchmark - and every server module runs it
+			     against its own backend, this project's and anybody else's. A backend nobody
+			     here can see is then proven by the same tests as the ones that ship. -->
 			<plugin>
-				<groupId>org.springframework.boot</groupId>
-				<artifactId>spring-boot-maven-plugin</artifactId>
-				<version>${spring-boot.version}</version>
-				<configuration>
-					<classifier>exec</classifier>
-					<mainClass>am.ik.redis.adapter.boot.RedisAdapterServerApplication</mainClass>
-				</configuration>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-jar-plugin</artifactId>
 				<executions>
 					<execution>
 						<goals>
-							<goal>repackage</goal>
+							<goal>test-jar</goal>
 						</goals>
+						<configuration>
+							<excludes>
+								<!-- This module's own test environment, not part of the harness. A
+								     second application.properties on a consumer's test class path
+								     would silently take the place of its own. -->
+								<exclude>application.properties</exclude>
+							</excludes>
+						</configuration>
 					</execution>
 				</executions>
 			</plugin>

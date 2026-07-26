@@ -25,7 +25,7 @@ import java.util.stream.LongStream;
  * that is meant to find where retrying stops keeping up has to be able to report that it
  * did.
  */
-final class Benchmark {
+public final class Benchmark {
 
 	private Benchmark() {
 	}
@@ -33,7 +33,7 @@ final class Benchmark {
 	/**
 	 * What is measured, once per iteration.
 	 */
-	interface Case {
+	public interface Case {
 
 		/**
 		 * Prepares iteration {@code iteration} and returns the call to be timed.
@@ -54,7 +54,7 @@ final class Benchmark {
 	 * @param operation the case
 	 * @return the measurement
 	 */
-	static Measurement measure(String name, int warmup, int iterations, Case operation) {
+	public static Measurement measure(String name, int warmup, int iterations, Case operation) {
 		for (int i = 0; i < warmup; i++) {
 			operation.prepare(-1 - i).run();
 		}
@@ -81,7 +81,8 @@ final class Benchmark {
 	 * keys of its own
 	 * @return the measurement, whose note names what failed if anything did
 	 */
-	static Measurement measureConcurrently(String name, int threads, int perThread, IntFunction<Case> caseForThread) {
+	public static Measurement measureConcurrently(String name, int threads, int perThread,
+			IntFunction<Case> caseForThread) {
 		ConcurrentLinkedQueue<Long> nanos = new ConcurrentLinkedQueue<>();
 		List<String> failures = Collections.synchronizedList(new ArrayList<>());
 		CountDownLatch ready = new CountDownLatch(threads);

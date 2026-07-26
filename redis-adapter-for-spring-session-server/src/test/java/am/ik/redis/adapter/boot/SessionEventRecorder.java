@@ -24,7 +24,7 @@ import static org.awaitility.Awaitility.await;
  * Events are kept for the life of the application context and always looked up by session
  * id, so tests sharing a context never see each other's.
  */
-class SessionEventRecorder implements ApplicationListener<AbstractSessionEvent> {
+public class SessionEventRecorder implements ApplicationListener<AbstractSessionEvent> {
 
 	/** How long to wait for an event before deciding it is not coming. */
 	private static final Duration TIMEOUT = Duration.ofSeconds(10);
@@ -42,7 +42,7 @@ class SessionEventRecorder implements ApplicationListener<AbstractSessionEvent> 
 	 * @param sessionId the session the event must be about
 	 * @return the first matching event
 	 */
-	<E extends AbstractSessionEvent> E awaitEvent(Class<E> type, String sessionId) {
+	public <E extends AbstractSessionEvent> E awaitEvent(Class<E> type, String sessionId) {
 		await().atMost(TIMEOUT).until(() -> !eventsOf(type, sessionId).isEmpty());
 		return eventsOf(type, sessionId).getFirst();
 	}
@@ -55,7 +55,7 @@ class SessionEventRecorder implements ApplicationListener<AbstractSessionEvent> 
 	 * @param sessionId the session the event would be about
 	 * @param within how long to watch for one
 	 */
-	void assertNoEvent(Class<? extends AbstractSessionEvent> type, String sessionId, Duration within) {
+	public void assertNoEvent(Class<? extends AbstractSessionEvent> type, String sessionId, Duration within) {
 		await().pollDelay(within)
 			.atMost(within.plus(TIMEOUT))
 			.untilAsserted(
@@ -69,7 +69,7 @@ class SessionEventRecorder implements ApplicationListener<AbstractSessionEvent> 
 	 * @param sessionId the session the events must be about
 	 * @return the matching events
 	 */
-	<E extends AbstractSessionEvent> List<E> eventsOf(Class<E> type, String sessionId) {
+	public <E extends AbstractSessionEvent> List<E> eventsOf(Class<E> type, String sessionId) {
 		return this.received.stream()
 			.filter(type::isInstance)
 			.map(type::cast)
