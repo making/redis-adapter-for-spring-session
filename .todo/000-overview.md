@@ -91,6 +91,24 @@ research; if you need them again, unzip
   **023 carries one decision that must be taken before its store is written** (the layout, and
   with it what to do about Cassandra's own tombstones), where **022**'s remaining decision is
   only how to fit a value into 100,000 bytes.
+- **024** is the third candidate, spiked twice on 2026-07-26 and not started, independent of 022
+  and 023 and of everything above. **The target is real DynamoDB** (decided 2026-07-26), and it
+  is the best of the three: a session save is one `TransactWriteItems` costing what a single
+  write costs, the removal and its announcement are written together atomically — so no
+  tombstones and no del-versus-expired guesswork — and the lease 022 calls its largest open
+  problem is one conditional `PutItem`. It fails in the same place all three candidates do, no
+  push, so a polled event log again, and it is the only one that has a **bill** as a design
+  input. It is also the only one whose **test store is a fake**: AWS publishes no DynamoDB to
+  run, so the ordinary build uses the Floci emulator, which was faithful to every documented
+  limit probed but lies about TTL timing (about a second, where AWS takes up to 48 hours) —
+  hence 024's rule that DynamoDB's TTL is never what expires a session, plus an opt-in real-AWS
+  suite for the four things an emulator cannot show. Its two before-any-code decisions are the
+  layout and how a hot expirations bucket is sharded across partitions, since one partition is
+  capped at 1,000 writes/s by a service quota. **ScyllaDB Alternator was spiked and set aside**;
+  it is a real database in a container and has no per-request bill, but it does not implement
+  `TransactWriteItems` — the whole of DynamoDB's advantage — and is more permissive about item
+  and batch size, so code proved against it would be refused by DynamoDB. 024's appendix keeps
+  those measurements and what an Alternator variant would have to do instead.
 
 ## Definition of done (every task)
 
@@ -130,3 +148,4 @@ research; if you need them again, unzip
 | 021 | A write etcd is too small for deserves its own error | not started |
 | 022 | A FoundationDB backend | spiked, ready to build |
 | 023 | A Cassandra backend | spiked, one decision short of ready |
+| 024 | A DynamoDB backend | spiked, two decisions short of ready |
