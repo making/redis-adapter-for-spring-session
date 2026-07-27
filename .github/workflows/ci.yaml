@@ -19,6 +19,15 @@ on:
     - pom.xml
     - '**/pom.xml'
     - .github/workflows/ci.yaml
+  workflow_dispatch:
+    inputs:
+      deploy_resume_from:
+        description: >-
+          Maven module to resume the deploy from (mvn -rf), for retrying a deploy that
+          failed partway through the reactor without re-publishing the modules that
+          already reached Maven Central. Leave empty for a normal full deploy.
+        required: false
+        default: ''
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -59,7 +68,9 @@ jobs:
       run: ./mvnw -V --no-transfer-progress test -Dspring.profiles.active=redis
   deploy:
     needs: test
-    if: github.event_name != 'pull_request'
+    if: |
+      github.event_name != 'pull_request' &&
+      !contains(github.event.head_commit.message, '[skip deploy]')
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -97,8 +108,14 @@ jobs:
               "password": "${{ steps.secrets.outputs.MAVEN_CENTRAL_PASSWORD }}"
           }]
     - name: Deploy to Maven Central
+      env:
+        DEPLOY_RESUME_FROM: ${{ github.event.inputs.deploy_resume_from }}
       run: |
         set -e
+        RESUME_ARGS=()
+        if [ -n "${DEPLOY_RESUME_FROM}" ]; then
+          RESUME_ARGS=(-rf ":${DEPLOY_RESUME_FROM}")
+        fi
         mvn -V \
             javadoc:jar \
             source:jar \
@@ -107,7 +124,8 @@ jobs:
             deploy \
             --no-transfer-progress \
             -Dgpg.passphrase=${GPG_PASSPHRASE} \
-            -DskipTests=true
+            -DskipTests=true \
+            "${RESUME_ARGS[@]}"
     - name: Revoke token
       if: always()
       run: |
