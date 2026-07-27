@@ -114,6 +114,62 @@
 				<surefire.excluded.groups/>
 			</properties>
 		</profile>
+		<!-- ./mvnw deploy -Pcentral-deploy
+		     javadoc, sources and the GPG signature all have to be plugin executions bound to a
+		     phase, not goals listed on the command line: `mvn package gpg:sign deploy` builds the
+		     jar once for `package` and a second time for `deploy` (deploy implies every phase
+		     before it, package included), so the signature taken between them stops matching the
+		     jar Central actually receives. One phase, one build, one signature - and only under
+		     this profile, so an ordinary install or test never tries to run gpg:sign without a key. -->
+		<profile>
+			<id>central-deploy</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-javadoc-plugin</artifactId>
+						<version>3.12.0</version>
+						<executions>
+							<execution>
+								<id>attach-javadocs</id>
+								<phase>package</phase>
+								<goals>
+									<goal>jar</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-source-plugin</artifactId>
+						<version>3.4.0</version>
+						<executions>
+							<execution>
+								<id>attach-sources</id>
+								<phase>package</phase>
+								<goals>
+									<goal>jar-no-fork</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-gpg-plugin</artifactId>
+						<version>3.0.1</version>
+						<executions>
+							<execution>
+								<id>sign-artifacts</id>
+								<phase>verify</phase>
+								<goals>
+									<goal>sign</goal>
+								</goals>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
 	</profiles>
 
 	<build>

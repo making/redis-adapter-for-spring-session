@@ -117,11 +117,8 @@ jobs:
           RESUME_ARGS=(-rf ":${DEPLOY_RESUME_FROM}")
         fi
         mvn -V \
-            javadoc:jar \
-            source:jar \
-            package \
-            org.apache.maven.plugins:maven-gpg-plugin:3.0.1:sign \
             deploy \
+            -Pcentral-deploy \
             --no-transfer-progress \
             -Dgpg.passphrase=${GPG_PASSPHRASE} \
             -DskipTests=true \
