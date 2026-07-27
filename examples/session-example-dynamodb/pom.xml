@@ -19,7 +19,7 @@
 		<!-- The adapter this example runs against. Only the tests use it, and only as a jar
 		     to start in a container: nothing from that project is on this application's class
 		     path. Point it at a released version and nothing else here moves. -->
-		<redis-adapter.version>0.1.1</redis-adapter.version>
+		<redis-adapter.version>0.1.2-SNAPSHOT</redis-adapter.version>
 		<playwright.version>1.61.0</playwright.version>
 		<nullability-maven-plugin.version>0.4.2</nullability-maven-plugin.version>
 	</properties>
