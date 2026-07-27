@@ -6,7 +6,7 @@
 
 	<groupId>am.ik.redis</groupId>
 	<artifactId>redis-adapter-for-spring-session</artifactId>
-	<version>0.1.0</version>
+	<version>0.1.1</version>
 	<packaging>pom</packaging>
 	<name>redis-adapter-for-spring-session</name>
 	<description>Redis Adapter for Spring Session</description>
