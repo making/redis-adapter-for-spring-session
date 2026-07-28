@@ -7,7 +7,7 @@
 	<parent>
 		<groupId>am.ik.redis</groupId>
 		<artifactId>redis-adapter-for-spring-session</artifactId>
-		<version>0.1.2-SNAPSHOT</version>
+		<version>0.2.0-SNAPSHOT</version>
 	</parent>
 
 	<artifactId>redis-adapter-for-spring-session-server</artifactId>
