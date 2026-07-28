@@ -37,7 +37,7 @@
 		     module built around it resolve the same SDK. -->
 		<awssdk.version>2.49.3</awssdk.version>
 		<spring-cloud-aws.version>4.1.0</spring-cloud-aws.version>
-		<testcontainers-floci.version>2.12.0</testcontainers-floci.version>
+		<testcontainers-floci.version>2.13.0</testcontainers-floci.version>
 		<!-- The FoundationDB client, and the version of the FoundationDB the tests run against:
 		     one property, because they must be the same minor version. The jar carries only the
 		     JNI shim, so a deployment installs the matching libfdb_c beside it and the tests
