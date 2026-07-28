@@ -49,7 +49,7 @@ final class SessionStoreContainers {
 	 * and it has to be the version of the {@code fdb-java} inside the adapter jar —
 	 * {@code foundationdb.version} in the repository's root {@code pom.xml}.
 	 */
-	static final String FOUNDATIONDB_VERSION = "7.3.63";
+	static final String FOUNDATIONDB_VERSION = "7.4.6";
 
 	static final String FOUNDATIONDB_IMAGE = "foundationdb/foundationdb:" + FOUNDATIONDB_VERSION;
 
