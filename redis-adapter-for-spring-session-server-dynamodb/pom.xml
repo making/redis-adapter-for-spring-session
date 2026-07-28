@@ -7,7 +7,7 @@
 	<parent>
 		<groupId>am.ik.redis</groupId>
 		<artifactId>redis-adapter-for-spring-session</artifactId>
-		<version>0.2.0</version>
+		<version>0.2.1-SNAPSHOT</version>
 	</parent>
 
 	<artifactId>redis-adapter-for-spring-session-server-dynamodb</artifactId>
