@@ -61,8 +61,15 @@ public interface KeyValueStore extends AutoCloseable {
 
 	/**
 	 * Stores {@code value} as a string under {@code key}, replacing whatever was there —
-	 * of whatever type — and dropping any TTL it had, exactly as Redis's {@code SET}
-	 * does.
+	 * of whatever type — and leaving it with the deadline given and no other, exactly as
+	 * Redis's {@code SET} does.
+	 *
+	 * <p>
+	 * The deadline is part of this write rather than a call that follows it. A store
+	 * spread over several nodes cannot honour {@code SET key value EX 10} in two round
+	 * trips: a process that dies between them leaves behind a key that never expires. So
+	 * the value and its deadline arrive together, and there is no moment at which the key
+	 * exists without the deadline it was written with.
 	 *
 	 * <p>
 	 * Replacing a live value fires <strong>no</strong> key event: overwriting a key is
@@ -72,8 +79,13 @@ public interface KeyValueStore extends AutoCloseable {
 	 * before this value takes its place.
 	 * @param key the key bytes
 	 * @param value the bytes to store (may be empty)
+	 * @param expireAtMillis the absolute expiry in epoch milliseconds, or {@code null} to
+	 * store a key that does not expire, which is what a {@code SET} with no expiry option
+	 * asks for — including over a key that had one. A deadline already in the past is
+	 * written like any other: the key is evicted, firing {@code onExpired}, on the next
+	 * access or by the active sweeper.
 	 */
-	void set(byte[] key, byte[] value);
+	void set(byte[] key, byte[] value, @Nullable Long expireAtMillis);
 
 	/**
 	 * Appends {@code value} to the string stored under {@code key}. If the key is absent

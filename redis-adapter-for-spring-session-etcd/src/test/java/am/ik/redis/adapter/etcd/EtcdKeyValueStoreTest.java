@@ -116,7 +116,7 @@ class EtcdKeyValueStoreTest {
 	void setStoresAndReadsBackExactBytes() {
 		byte[] binary = { 0, 13, 10, -1, 42 }; // NUL CR LF 0xFF, arbitrary
 
-		this.store.set(b("k"), binary);
+		this.store.set(b("k"), binary, null);
 
 		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(binary);
 	}
@@ -125,7 +125,7 @@ class EtcdKeyValueStoreTest {
 	void setReplacesAValueOfAnotherTypeWholesale() {
 		this.store.hset(b("k"), fields("a", "1"));
 
-		this.store.set(b("k"), b("plain"));
+		this.store.set(b("k"), b("plain"), null);
 
 		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("plain"));
 	}
@@ -142,11 +142,42 @@ class EtcdKeyValueStoreTest {
 		long lease = leaseOf(b("k"));
 		assertThat(lease).isNotZero();
 
-		this.store.set(b("k"), b("fresh"));
+		this.store.set(b("k"), b("fresh"), null);
 
 		assertThat(this.store.getExpireAt(b("k"))).isNull();
 		assertThat(leaseOf(b("k"))).isZero();
 		assertThat(leases()).doesNotContain(lease);
+	}
+
+	/**
+	 * The deadline goes on in the same put as the value, on a lease granted before it:
+	 * one raft write, and no revision at which the key is there without the deadline its
+	 * client asked for.
+	 */
+	@Test
+	void setWithADeadlineWritesItOnALeaseOfItsOwn() {
+		long deadline = this.store.currentTimeMillis() + 60_000;
+
+		this.store.set(b("k"), b("fresh"), deadline);
+
+		assertThat(this.store.getExpireAt(b("k"))).isEqualTo(deadline);
+		assertThat(leaseOf(b("k"))).isNotZero();
+	}
+
+	/**
+	 * The lease the old value was on holds nothing afterwards, so it has to be revoked.
+	 */
+	@Test
+	void setWithADeadlineRevokesTheLeaseTheKeyWasOn() {
+		this.store.append(b("k"), b("v"));
+		this.store.expireAt(b("k"), this.store.currentTimeMillis() + 60_000);
+		long previous = leaseOf(b("k"));
+		assertThat(previous).isNotZero();
+
+		this.store.set(b("k"), b("fresh"), this.store.currentTimeMillis() + 30_000);
+
+		assertThat(leaseOf(b("k"))).isNotZero().isNotEqualTo(previous);
+		assertThat(leases()).doesNotContain(previous);
 	}
 
 	@Test
@@ -154,7 +185,7 @@ class EtcdKeyValueStoreTest {
 		this.store.append(b("k"), b("v"));
 		this.store.expireAt(b("k"), this.store.currentTimeMillis() - 1);
 
-		this.store.set(b("k"), b("fresh"));
+		this.store.set(b("k"), b("fresh"), null);
 
 		this.listener.awaitEvent("expired k");
 		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("fresh"));

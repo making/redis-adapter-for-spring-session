@@ -235,24 +235,29 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 	 * <p>
 	 * This is the one write that does not go through the batching queue: it replaces the
 	 * value rather than deriving one from what is there, so there is nothing for a batch
-	 * to fold together, and it has to leave the key on no lease at all — which is a
-	 * decision about the key's deadline, and those are taken with the key held.
+	 * to fold together, and it decides which lease the key ends up on — deadlines are
+	 * decided with the key held.
+	 *
+	 * <p>
+	 * The deadline goes on in the same put as the value, on a lease granted before it:
+	 * one raft write puts the key there already expiring, so no replica can read a value
+	 * that outlives what its client asked for.
 	 */
 	@Override
-	public void set(byte[] key, byte[] value) {
+	public void set(byte[] key, byte[] value, @Nullable Long expireAtMillis) {
 		byte[] stored = value.clone();
 		this.queues.exclusively(key, () -> {
-			setHeld(key, stored);
+			setHeld(key, stored, expireAtMillis);
 			return true;
 		});
 	}
 
-	private void setHeld(byte[] key, byte[] value) {
+	private void setHeld(byte[] key, byte[] value, @Nullable Long expireAtMillis) {
 		byte[] etcdKey = etcdKey(key);
 		for (int attempt = 1; attempt <= this.maxAttempts; attempt++) {
 			Kv kv = this.client.get(etcdKey);
 			long revision = 0;
-			long lease = EtcdClient.NO_LEASE;
+			long previous = EtcdClient.NO_LEASE;
 			if (kv != null) {
 				revision = kv.modRevision();
 				Envelope envelope = Envelope.decode(kv.value());
@@ -267,18 +272,28 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 				// A tombstone reads as absent, but its revision still guards the write,
 				// so
 				// what replaces it cannot overwrite a value written in the meantime.
-				lease = kv.lease();
+				previous = kv.lease();
 			}
+			long deadline = (expireAtMillis == null) ? Envelope.NO_EXPIRY : expireAtMillis;
+			long ttlSeconds = (expireAtMillis == null) ? Envelope.NO_LEASE_TTL : leaseSeconds(expireAtMillis);
+			// The key's own lease is never reused, however well it would renew: the value
+			// under it is being replaced, and a write that does not land must leave the
+			// key
+			// exactly as it was, deadline included.
+			long lease = (expireAtMillis == null) ? EtcdClient.NO_LEASE : this.client.grantLease(ttlSeconds);
 			EtcdClient.Write written = this.client.putIfUnchanged(etcdKey, revision,
-					Envelope.of(new StringValue(value), Envelope.NO_EXPIRY, Envelope.NO_LEASE_TTL).encode(),
-					EtcdClient.NO_LEASE);
+					Envelope.of(new StringValue(value), deadline, ttlSeconds).encode(), lease);
 			if (written.written()) {
-				// SET drops the deadline the key had, so the lease it was on now holds
-				// nothing — and a lease outlives the key it was granted for by as much as
-				// its remaining TTL.
-				this.client.revokeLeaseQuietly(lease);
+				// The key is on the lease this write granted, or on none at all, so the
+				// one
+				// it was on holds nothing — and a lease outlives the key it was granted
+				// for
+				// by as much as its remaining TTL.
+				this.client.revokeLeaseQuietly(previous);
 				return;
 			}
+			// Nothing is on the lease that was granted for a write that did not land.
+			this.client.revokeLeaseQuietly(lease);
 			backOff(attempt);
 		}
 		throw contention("SET", key);

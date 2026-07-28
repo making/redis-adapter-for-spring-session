@@ -6,6 +6,7 @@ import java.util.List;
 import am.ik.redis.adapter.store.RedisValue;
 import am.ik.redis.adapter.store.StringValue;
 import am.ik.redis.adapter.store.TypeMismatchException;
+import org.jspecify.annotations.Nullable;
 
 /**
  * The string commands: {@code APPEND}, which Spring Session uses, and {@code SET} /
@@ -26,14 +27,26 @@ import am.ik.redis.adapter.store.TypeMismatchException;
  * than a special case. Neither is on any path Spring Session takes.
  *
  * <p>
- * {@code SET} takes no options. {@code EX}, {@code NX}, {@code KEEPTTL} and the rest are
- * each a conditional or combined write the
- * {@link am.ik.redis.adapter.store.KeyValueStore} SPI does not express, and a backend
- * spread over several nodes cannot honour them by following the write with a second round
- * trip — so a syntax error is what they get, rather than semantics they do not have.
- * {@code EXPIRE} and {@code PEXPIRE} put a deadline on a key that is already there.
+ * {@code SET} takes the four expiry options — {@code EX}, {@code PX}, {@code EXAT} and
+ * {@code PXAT} — and no others. They differ only in unit and in whether they count from
+ * now, so all four become the one absolute deadline
+ * {@link am.ik.redis.adapter.store.KeyValueStore#set} writes with the value, in a single
+ * operation of the store: a backend spread over several nodes could not honour a deadline
+ * by following the write with a second round trip, because a process that dies between
+ * the two leaves behind a key that never expires.
+ *
+ * <p>
+ * {@code NX} / {@code XX}, {@code KEEPTTL} and {@code GET} are refused. Each is a
+ * conditional write, or a read folded into one, that the SPI does not express — and a
+ * store cannot be asked for it in two round trips for the same reason. A syntax error is
+ * what they get, rather than semantics they do not have.
  */
 public final class StringCommands {
+
+	/** What Redis replies to an option it does not know, or a combination it refuses. */
+	private static final String SYNTAX_ERROR = "ERR syntax error";
+
+	private static final long MILLIS_PER_SECOND = 1000;
 
 	private StringCommands() {
 	}
@@ -49,18 +62,55 @@ public final class StringCommands {
 	}
 
 	/**
-	 * {@code SET key value}: stores the value, replacing whatever the key held and any
-	 * expiry it had.
+	 * {@code SET key value [EX seconds | PX milliseconds | EXAT unix-time-seconds | PXAT
+	 * unix-time-milliseconds]}: stores the value, replacing whatever the key held, with
+	 * the deadline asked for and no other.
 	 */
 	private static void set(CommandContext context, List<byte[]> argv) throws IOException {
 		if (argv.size() < 3) {
 			throw RedisCommandException.wrongNumberOfArguments("set");
 		}
-		if (argv.size() > 3) {
-			throw new RedisCommandException("ERR syntax error");
-		}
-		context.store().set(argv.get(1), argv.get(2));
+		context.store().set(argv.get(1), argv.get(2), deadline(context, argv));
 		context.writer().writeSimpleString("OK");
+	}
+
+	/**
+	 * Reads whatever follows the value as the one expiry option {@code SET} accepts.
+	 * @return the absolute deadline in epoch milliseconds, or {@code null} if no expiry
+	 * was asked for
+	 * @throws RedisCommandException if what follows the value is not exactly one expiry
+	 * option and its argument
+	 */
+	private static @Nullable Long deadline(CommandContext context, List<byte[]> argv) {
+		if (argv.size() == 3) {
+			return null;
+		}
+		// Everything else lands here: an option with no argument, two of them, and the
+		// options that are refused outright.
+		if (argv.size() != 5) {
+			throw new RedisCommandException(SYNTAX_ERROR);
+		}
+		Expiry expiry = Expiry.of(CommandArguments.upperCase(argv.get(3)));
+		if (expiry == null) {
+			throw new RedisCommandException(SYNTAX_ERROR);
+		}
+		long amount = CommandArguments.integer(argv.get(4));
+		// Redis refuses a non-positive argument to all four, an absolute one included,
+		// and
+		// says so before the key is touched.
+		if (amount <= 0) {
+			throw invalidExpireTime();
+		}
+		try {
+			return expiry.deadline(amount, context.store().currentTimeMillis());
+		}
+		catch (ArithmeticException e) {
+			throw invalidExpireTime();
+		}
+	}
+
+	private static RedisCommandException invalidExpireTime() {
+		return new RedisCommandException("ERR invalid expire time in 'set' command");
 	}
 
 	/**
@@ -89,6 +139,62 @@ public final class StringCommands {
 			throw RedisCommandException.wrongNumberOfArguments("append");
 		}
 		context.writer().writeInteger(context.store().append(argv.get(1), argv.get(2)));
+	}
+
+	/**
+	 * The four spellings of a {@code SET} deadline, which differ only in the unit of
+	 * their argument and in whether it counts from now or from the epoch. The store works
+	 * in absolute milliseconds alone, so all four arrive there as one number.
+	 */
+	private enum Expiry {
+
+		/** {@code EX seconds}. */
+		EX(MILLIS_PER_SECOND, true),
+
+		/** {@code PX milliseconds}. */
+		PX(1, true),
+
+		/** {@code EXAT unix-time-seconds}. */
+		EXAT(MILLIS_PER_SECOND, false),
+
+		/** {@code PXAT unix-time-milliseconds}. */
+		PXAT(1, false);
+
+		private final long millisPerUnit;
+
+		private final boolean relative;
+
+		Expiry(long millisPerUnit, boolean relative) {
+			this.millisPerUnit = millisPerUnit;
+			this.relative = relative;
+		}
+
+		/**
+		 * Returns the option of that name, which is the name of the constant itself.
+		 * @param option the upper-cased option as it arrived
+		 * @return the option, or {@code null} if it is not one
+		 */
+		static @Nullable Expiry of(String option) {
+			for (Expiry expiry : values()) {
+				if (expiry.name().equals(option)) {
+					return expiry;
+				}
+			}
+			return null;
+		}
+
+		/**
+		 * Converts the option's argument to the absolute deadline the store works in.
+		 * @param amount the argument, which the caller has already refused to be
+		 * non-positive
+		 * @param now the store's clock, which the relative variants count from
+		 * @return the absolute deadline in epoch milliseconds
+		 * @throws ArithmeticException if the deadline does not fit in a {@code long}
+		 */
+		long deadline(long amount, long now) {
+			return Math.addExact(this.relative ? now : 0, Math.multiplyExact(amount, this.millisPerUnit));
+		}
+
 	}
 
 }

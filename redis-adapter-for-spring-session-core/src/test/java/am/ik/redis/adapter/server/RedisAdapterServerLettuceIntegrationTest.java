@@ -10,7 +10,9 @@ import io.lettuce.core.ClientOptions;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisConnectionException;
 import io.lettuce.core.RedisURI;
+import io.lettuce.core.SetArgs;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.lettuce.core.api.sync.RedisCommands;
 import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.protocol.ProtocolVersion;
 import org.junit.jupiter.api.AfterEach;
@@ -112,6 +114,23 @@ class RedisAdapterServerLettuceIntegrationTest {
 
 		assertThat(this.serverSocketFactory.commandNames()).startsWith("PING").doesNotContain("HELLO");
 		assertThat(this.serverSocketFactory.replies()).startsWith("+PONG\r\n");
+	}
+
+	/**
+	 * {@code SET} exists for the person with a client in hand, so the expiry option a
+	 * real client encodes has to be the one the adapter reads — and the key has to come
+	 * back with the deadline that {@code SET} alone put on it.
+	 */
+	@Test
+	void aClientCanSetAValueWithAnExpiryAndReadTheDeadlineBack() {
+		try (StatefulRedisConnection<String, String> connection = connect(redisUri().build())) {
+			RedisCommands<String, String> commands = connection.sync();
+
+			assertThat(commands.set("demo", "hello", SetArgs.Builder.ex(10))).isEqualTo("OK");
+
+			assertThat(commands.get("demo")).isEqualTo("hello");
+			assertThat(commands.ttl("demo")).isEqualTo(10);
+		}
 	}
 
 	@Test

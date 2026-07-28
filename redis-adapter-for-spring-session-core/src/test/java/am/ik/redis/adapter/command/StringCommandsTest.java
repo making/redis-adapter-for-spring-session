@@ -128,15 +128,137 @@ class StringCommandsTest {
 	}
 
 	/**
-	 * An option is refused rather than ignored: a client told {@code +OK} would believe
-	 * the key expires in ten seconds, and nothing would ever tell it otherwise.
+	 * The deadline arrives with the value rather than in a command of its own, which is
+	 * the whole point of the option: there is no moment at which the key is there without
+	 * it.
 	 */
 	@Test
-	void setWithAnOptionIsRejectedRatherThanIgnored() throws Exception {
+	void settingWithSecondsGivesTheKeyItsDeadlineStraightAway() throws Exception {
 		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "EX", "10"));
+		this.dispatcher.dispatch(this.context, argv("PTTL", "greeting"));
+		this.dispatcher.dispatch(this.context, argv("GET", "greeting"));
+
+		assertThat(this.context.replies()).isEqualTo("+OK\r\n:10000\r\n$5\r\nhello\r\n");
+	}
+
+	@Test
+	void settingWithMillisecondsGivesTheKeyItsDeadlineStraightAway() throws Exception {
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "PX", "1500"));
+		this.dispatcher.dispatch(this.context, argv("PTTL", "greeting"));
+
+		assertThat(this.context.replies()).isEqualTo("+OK\r\n:1500\r\n");
+	}
+
+	/** {@code EXAT} counts from the epoch, so the store's clock is not added to it. */
+	@Test
+	void settingWithAnAbsoluteSecondGivesTheKeyThatDeadline() throws Exception {
+		long deadline = this.store.currentTimeMillis() + 30_000;
+
+		this.dispatcher.dispatch(this.context,
+				argv("SET", "greeting", "hello", "EXAT", Long.toString(deadline / 1000)));
+		this.dispatcher.dispatch(this.context, argv("PTTL", "greeting"));
+
+		assertThat(this.context.replies()).isEqualTo("+OK\r\n:30000\r\n");
+	}
+
+	@Test
+	void settingWithAnAbsoluteMillisecondGivesTheKeyThatDeadline() throws Exception {
+		long deadline = this.store.currentTimeMillis() + 45_000;
+
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "PXAT", Long.toString(deadline)));
+		this.dispatcher.dispatch(this.context, argv("PTTL", "greeting"));
+
+		assertThat(this.context.replies()).isEqualTo("+OK\r\n:45000\r\n");
+	}
+
+	/** An option is a name on the wire, and Redis reads it however it is spelled. */
+	@Test
+	void anOptionIsReadWhicheverCaseItArrivesIn() throws Exception {
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "ex", "10"));
+		this.dispatcher.dispatch(this.context, argv("PTTL", "greeting"));
+
+		assertThat(this.context.replies()).isEqualTo("+OK\r\n:10000\r\n");
+	}
+
+	/**
+	 * A deadline in the past is written like any other, and the key is gone the moment
+	 * anything touches it — what Redis does with {@code SET key value EXAT 1}.
+	 */
+	@Test
+	void settingWithADeadlineAlreadyPassedLeavesNothingBehind() throws Exception {
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "PXAT", "1"));
 		this.dispatcher.dispatch(this.context, argv("EXISTS", "greeting"));
 
-		assertThat(this.context.replies()).isEqualTo("-ERR syntax error\r\n:0\r\n");
+		assertThat(this.context.replies()).isEqualTo("+OK\r\n:0\r\n");
+	}
+
+	/** The expiry replaces whatever deadline the key had, as a plain {@code SET} does. */
+	@Test
+	void settingWithAnExpiryReplacesTheDeadlineTheKeyHad() throws Exception {
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "EX", "60"));
+
+		this.dispatcher.dispatch(this.context.reset(), argv("SET", "greeting", "hi", "EX", "10"));
+		this.dispatcher.dispatch(this.context, argv("PTTL", "greeting"));
+
+		assertThat(this.context.replies()).isEqualTo("+OK\r\n:10000\r\n");
+	}
+
+	/**
+	 * Redis refuses a non-positive expiry — an absolute one included — before the key is
+	 * touched, so a rejected {@code SET} leaves nothing behind.
+	 */
+	@Test
+	void setWithANonPositiveExpiryIsRejectedAndWritesNothing() throws Exception {
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "EX", "0"));
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "PXAT", "-1"));
+		this.dispatcher.dispatch(this.context, argv("EXISTS", "greeting"));
+
+		assertThat(this.context.replies()).isEqualTo("-ERR invalid expire time in 'set' command\r\n"
+				+ "-ERR invalid expire time in 'set' command\r\n:0\r\n");
+	}
+
+	/** Seconds far enough out to overflow milliseconds are not a deadline either. */
+	@Test
+	void setWithAnExpiryThatDoesNotFitIsRejected() throws Exception {
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "EX", Long.toString(Long.MAX_VALUE)));
+
+		assertThat(this.context.replies()).isEqualTo("-ERR invalid expire time in 'set' command\r\n");
+	}
+
+	@Test
+	void setWithAnExpiryThatIsNotANumberIsRejected() throws Exception {
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "EX", "soon"));
+
+		assertThat(this.context.replies()).isEqualTo("-ERR value is not an integer or out of range\r\n");
+	}
+
+	@Test
+	void setWithAnExpiryOptionAndNoArgumentIsRejected() throws Exception {
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "EX"));
+
+		assertThat(this.context.replies()).isEqualTo("-ERR syntax error\r\n");
+	}
+
+	/** One deadline or none: Redis refuses two ways of spelling the same thing. */
+	@Test
+	void setWithTwoExpiriesIsRejected() throws Exception {
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "EX", "10", "PX", "1000"));
+
+		assertThat(this.context.replies()).isEqualTo("-ERR syntax error\r\n");
+	}
+
+	/**
+	 * A conditional write is refused rather than ignored: a client told {@code +OK} would
+	 * believe the key it asked not to overwrite is untouched, and nothing would ever tell
+	 * it otherwise.
+	 */
+	@Test
+	void setWithAnOptionTheStoreCannotExpressIsRejectedRatherThanIgnored() throws Exception {
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "NX"));
+		this.dispatcher.dispatch(this.context, argv("SET", "greeting", "hello", "KEEPTTL"));
+		this.dispatcher.dispatch(this.context, argv("EXISTS", "greeting"));
+
+		assertThat(this.context.replies()).isEqualTo("-ERR syntax error\r\n-ERR syntax error\r\n:0\r\n");
 	}
 
 	@Test

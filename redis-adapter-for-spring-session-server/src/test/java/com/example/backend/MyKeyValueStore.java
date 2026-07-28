@@ -53,8 +53,8 @@ final class MyKeyValueStore implements KeyValueStore {
 	}
 
 	@Override
-	public void set(byte[] key, byte[] value) {
-		this.delegate.set(key, value);
+	public void set(byte[] key, byte[] value, @Nullable Long expireAtMillis) {
+		this.delegate.set(key, value, expireAtMillis);
 	}
 
 	@Override

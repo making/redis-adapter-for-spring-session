@@ -316,7 +316,7 @@ public final class DynamoDbKeyValueStore implements KeyValueStore {
 	// --- string ------------------------------------------------------------------------
 
 	@Override
-	public void set(byte[] key, byte[] value) {
+	public void set(byte[] key, byte[] value, @Nullable Long expireAtMillis) {
 		String what = "SET " + ByteArrayKey.of(key);
 		requireFits(what, metaPk(key), META_SK, value.length);
 		byte[] stored = value.clone();
@@ -333,9 +333,14 @@ public final class DynamoDbKeyValueStore implements KeyValueStore {
 				Map<String, AttributeValue> item = newMeta(key, TYPE_STRING);
 				item.put("v", AttributeValue.fromB(SdkBytes.fromByteArray(stored)));
 				// The whole meta item is replaced, so the deadline attributes go with the
-				// old value — SET drops the TTL — and the incarnation counter moves on,
-				// or
-				// a removal guarded on the old one would take this value with it.
+				// old value and the deadline asked for arrives in the same request as the
+				// value — one billed write, not two, and never a value whose deadline is
+				// still on its way. The incarnation counter moves on, or a removal
+				// guarded
+				// on the old one would take this value with it.
+				if (expireAtMillis != null) {
+					putDeadline(item, key, expireAtMillis);
+				}
 				boolean written = (meta == null)
 						? putConditional(what, item, "attribute_not_exists(#pk)", Map.of("#pk", "pk"), Map.of())
 						: replaceMeta(what, item, meta);
@@ -777,12 +782,25 @@ public final class DynamoDbKeyValueStore implements KeyValueStore {
 		}
 		Long expireAt = sourceMeta.expireAt();
 		if (expireAt != null) {
-			item.put("exp", number(expireAt));
-			item.put("ttl", number(ttlBackstopSeconds(expireAt)));
-			item.put("duePk", AttributeValue.fromS(duePk(destination)));
-			item.put("dueAt", number(expireAt));
+			putDeadline(item, destination, expireAt);
 		}
 		return item;
+	}
+
+	/**
+	 * Writes a deadline into a meta item being built: what every read compares against,
+	 * the storage backstop AWS collects on, and the entry in the deadline index the
+	 * sweeper finds the key by. The four go in together, so a meta item never carries a
+	 * deadline the sweeper cannot see.
+	 * @param item the meta item being built
+	 * @param key the Redis key it belongs to
+	 * @param expireAtMillis the absolute deadline in epoch milliseconds
+	 */
+	private void putDeadline(Map<String, AttributeValue> item, byte[] key, long expireAtMillis) {
+		item.put("exp", number(expireAtMillis));
+		item.put("ttl", number(ttlBackstopSeconds(expireAtMillis)));
+		item.put("duePk", AttributeValue.fromS(duePk(key)));
+		item.put("dueAt", number(expireAtMillis));
 	}
 
 	private void writeChildren(byte[] destination, byte[] source, String type) {

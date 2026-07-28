@@ -313,7 +313,7 @@ public final class FoundationDbKeyValueStore implements KeyValueStore {
 	// --- string ------------------------------------------------------------------------
 
 	@Override
-	public void set(byte[] key, byte[] value) {
+	public void set(byte[] key, byte[] value, @Nullable Long expireAtMillis) {
 		String what = "SET " + name(key);
 		byte[] stored = value.clone();
 		inTransaction(what, attempt -> {
@@ -326,7 +326,14 @@ public final class FoundationDbKeyValueStore implements KeyValueStore {
 			// The children of what was here — and the strays of a key that crashed
 			// mid-removal — would otherwise be read as part of a later value.
 			attempt.transaction.clear(childRange(key));
-			writeMeta(attempt, key, new Meta(TYPE_STRING, null, stored), what);
+			// The value, the deadline asked for and the index entry the sweeper finds it
+			// by
+			// commit together, so the key is never there under a deadline nobody knows
+			// of.
+			writeMeta(attempt, key, new Meta(TYPE_STRING, expireAtMillis, stored), what);
+			if (expireAtMillis != null) {
+				attempt.transaction.set(dueKey(key, expireAtMillis), EMPTY);
+			}
 			return true;
 		});
 	}

@@ -97,15 +97,29 @@ special case.
 | Wire command | Behaviour | Reply |
 |---|---|---|
 | `SET key value` | replace the key with a STRING, **whatever type it held**, and **drop any TTL** it had; announce nothing (overwriting is not deleting), except the usual lazy expiry of an overdue key first | `+OK` |
+| `SET key value EX s \| PX ms \| EXAT unix-s \| PXAT unix-ms` | the same, except that the key is left with that deadline — converted to absolute milliseconds and passed to `KeyValueStore.set` with the value | `+OK` |
 | `GET key` | the string, or a null bulk if the key is absent; `WRONGTYPE` if it holds anything else | bulk / null bulk |
 
-`SET` takes **no options**. `EX`/`PX`/`EXAT`/`PXAT`, `NX`/`XX`, `KEEPTTL` and `GET` are each a
-conditional or combined write the `KeyValueStore` SPI does not express — and a distributed backend
-cannot honour one by following the write with a second round trip, since a process that dies
-between the two leaves a key that never expires. Anything after the value is therefore answered
-`ERR syntax error` rather than accepted and ignored, which would leave a client believing in a
-deadline nothing will ever set. `EXPIRE` / `PEXPIRE` put a deadline on a key that is already
-there.
+The four expiry options differ only in unit and in whether they count from now, so all four reach
+the store as the one absolute deadline it works in, **in the same operation as the value**. That
+is what makes them expressible at all: a distributed backend cannot honour a deadline by following
+the write with a second round trip, since a process that dies between the two leaves a key that
+never expires. Each backend writes the two together — etcd puts the value on a lease granted for
+the deadline, DynamoDB puts the deadline attributes into the same meta item, FoundationDB commits
+the value and the deadline index entry in one transaction.
+
+The argument is refused, before the key is touched, if it is not an integer
+(`ERR value is not an integer or out of range`), if it is zero or negative, or if it does not fit
+in a `long` (`ERR invalid expire time in 'set' command`) — an absolute deadline included, exactly
+as Redis refuses them. A deadline already in the past is written like any other: the key is there
+and gone the moment anything touches it.
+
+`NX`/`XX`, `KEEPTTL` and `GET` are refused with `ERR syntax error`, as is anything else after the
+value, or a second expiry option. Each is a conditional write, or a read folded into one, that the
+`KeyValueStore` SPI does not express, and the two-round-trip fallback is no more available to them
+than it is to a deadline. Refusing beats accepting and ignoring, which would leave a client
+believing in semantics nothing implements. `EXPIRE` / `PEXPIRE` put a deadline on a key that is
+already there.
 
 ## C. Passive & active expiration (critical for indexed mode)
 

@@ -103,7 +103,7 @@ class DynamoDbKeyValueStoreTest {
 	void setStoresAndReadsBackExactBytes() {
 		byte[] binary = { 0, 13, 10, -1, 42 }; // NUL CR LF 0xFF, arbitrary
 
-		this.store.set(b("k"), binary);
+		this.store.set(b("k"), binary, null);
 
 		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(binary);
 	}
@@ -117,7 +117,7 @@ class DynamoDbKeyValueStoreTest {
 	void setReplacesAValueOfAnotherTypeAndTakesItsItemsWithIt() {
 		this.store.hset(b("k"), fields("a", "1"));
 
-		this.store.set(b("k"), b("plain"));
+		this.store.set(b("k"), b("plain"), null);
 
 		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("plain"));
 		assertThat(this.store.delete(b("k"))).isTrue();
@@ -130,10 +130,27 @@ class DynamoDbKeyValueStoreTest {
 		this.store.append(b("k"), b("v"));
 		this.store.expireAt(b("k"), this.store.currentTimeMillis() + 60_000);
 
-		this.store.set(b("k"), b("fresh"));
+		this.store.set(b("k"), b("fresh"), null);
 
 		assertThat(this.store.getExpireAt(b("k"))).isNull();
 		this.listener.assertSilence(Duration.ofMillis(700));
+	}
+
+	/**
+	 * The deadline goes into the same put as the value — the attribute every read
+	 * compares against, the storage backstop and the index entry the sweeper finds the
+	 * key by — so a key nobody ever touches again still dies announced, and it costs the
+	 * one billed write rather than two.
+	 */
+	@Test
+	void setWithADeadlineIsSweptAndAnnouncedWithoutBeingTouched() {
+		long deadline = this.store.currentTimeMillis() + 300;
+
+		this.store.set(b("due"), b("v"), deadline);
+
+		assertThat(this.store.getExpireAt(b("due"))).isEqualTo(deadline);
+		this.listener.awaitEvent("expired due");
+		assertThat(this.store.exists(b("due"))).isFalse();
 	}
 
 	@Test
@@ -141,7 +158,7 @@ class DynamoDbKeyValueStoreTest {
 		this.store.append(b("k"), b("v"));
 		this.store.expireAt(b("k"), this.store.currentTimeMillis() - 1);
 
-		this.store.set(b("k"), b("fresh"));
+		this.store.set(b("k"), b("fresh"), null);
 
 		this.listener.awaitEvent("expired k");
 		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("fresh"));

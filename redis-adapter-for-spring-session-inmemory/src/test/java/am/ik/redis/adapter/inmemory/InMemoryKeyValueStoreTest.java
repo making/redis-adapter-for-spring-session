@@ -80,14 +80,14 @@ class InMemoryKeyValueStoreTest {
 	@Test
 	void setStoresAndReadsBackExactBytes() {
 		byte[] binary = { 0, 13, 10, -1, 42 }; // NUL CR LF 0xFF, arbitrary
-		this.store.set(b("k"), binary);
+		this.store.set(b("k"), binary, null);
 		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(binary);
 	}
 
 	@Test
 	void setReplacesAValueOfAnotherTypeWholesale() {
 		this.store.hset(b("k"), Map.of(b("f"), b("v")));
-		this.store.set(b("k"), b("plain"));
+		this.store.set(b("k"), b("plain"), null);
 		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("plain"));
 	}
 
@@ -96,7 +96,7 @@ class InMemoryKeyValueStoreTest {
 		this.store.append(b("k"), b("v"));
 		this.store.expireAt(b("k"), this.clock.get() + 1000);
 
-		this.store.set(b("k"), b("fresh"));
+		this.store.set(b("k"), b("fresh"), null);
 
 		assertThat(this.store.getExpireAt(b("k"))).isNull();
 		this.clock.addAndGet(5000);
@@ -104,12 +104,37 @@ class InMemoryKeyValueStoreTest {
 		assertThat(this.listener.expired).isEmpty();
 	}
 
+	/**
+	 * The deadline lands in the same entry as the value, so the key is never there
+	 * without it and nothing has to follow the write to put it on.
+	 */
+	@Test
+	void setWithADeadlineWritesItWithTheValue() {
+		long deadline = this.clock.get() + 1000;
+
+		this.store.set(b("k"), b("v"), deadline);
+
+		assertThat(this.store.getExpireAt(b("k"))).isEqualTo(deadline);
+		this.clock.addAndGet(1000);
+		assertThat(this.store.exists(b("k"))).isFalse();
+		assertThat(this.listener.expired).containsExactly("k");
+	}
+
+	/** A deadline already passed is written like any other: the key dies announced. */
+	@Test
+	void setWithADeadlineAlreadyPassedLeavesAKeyThatIsGoneWhenTouched() {
+		this.store.set(b("k"), b("v"), this.clock.get() - 1);
+
+		assertThat(this.store.exists(b("k"))).isFalse();
+		assertThat(this.listener.expired).containsExactly("k");
+	}
+
 	@Test
 	void setOverAnOverdueKeyAnnouncesTheExpiryFirst() {
 		this.store.append(b("k"), b("v"));
 		this.store.expireAt(b("k"), this.clock.get() - 1);
 
-		this.store.set(b("k"), b("fresh"));
+		this.store.set(b("k"), b("fresh"), null);
 
 		assertThat(this.listener.expired).containsExactly("k");
 		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("fresh"));
@@ -120,7 +145,7 @@ class InMemoryKeyValueStoreTest {
 	void setOverALiveKeyFiresNothing() {
 		this.store.append(b("k"), b("v"));
 
-		this.store.set(b("k"), b("fresh"));
+		this.store.set(b("k"), b("fresh"), null);
 
 		assertThat(this.listener.deleted).isEmpty();
 		assertThat(this.listener.expired).isEmpty();

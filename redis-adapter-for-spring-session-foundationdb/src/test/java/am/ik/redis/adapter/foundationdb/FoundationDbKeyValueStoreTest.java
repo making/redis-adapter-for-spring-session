@@ -95,7 +95,7 @@ class FoundationDbKeyValueStoreTest {
 	void setStoresAndReadsBackExactBytes() {
 		byte[] binary = { 0, 13, 10, -1, 42 }; // NUL CR LF 0xFF, arbitrary
 
-		this.store.set(key("s"), binary);
+		this.store.set(key("s"), binary, null);
 
 		assertThat(string(key("s"))).isEqualTo(binary);
 	}
@@ -108,7 +108,7 @@ class FoundationDbKeyValueStoreTest {
 	void setReplacesAValueOfAnotherTypeWholesale() {
 		this.store.hset(key("k"), fields("a", "1", "b", "2"));
 
-		this.store.set(key("k"), b("plain"));
+		this.store.set(key("k"), b("plain"), null);
 
 		assertThat(string(key("k"))).isEqualTo(b("plain"));
 	}
@@ -118,10 +118,27 @@ class FoundationDbKeyValueStoreTest {
 		this.store.append(key("s"), b("v"));
 		this.store.expireAt(key("s"), this.store.currentTimeMillis() + 60_000);
 
-		this.store.set(key("s"), b("fresh"));
+		this.store.set(key("s"), b("fresh"), null);
 
 		assertThat(this.store.getExpireAt(key("s"))).isNull();
 		this.events.assertSilence(SILENCE);
+	}
+
+	/**
+	 * The value, its deadline and the index entry the sweeper finds the key by commit in
+	 * one transaction, so a key nobody touches again still dies announced — FoundationDB
+	 * has no TTL of its own, and a deadline the index does not know of would never be
+	 * collected.
+	 */
+	@Test
+	void setWithADeadlineIsSweptAndAnnouncedWithoutBeingTouched() {
+		long deadline = this.store.currentTimeMillis() + 300;
+
+		this.store.set(key("due"), b("v"), deadline);
+
+		assertThat(this.store.getExpireAt(key("due"))).isEqualTo(deadline);
+		this.events.awaitEvent("expired " + this.prefix + "due");
+		assertThat(this.store.exists(key("due"))).isFalse();
 	}
 
 	@Test
@@ -129,7 +146,7 @@ class FoundationDbKeyValueStoreTest {
 		this.store.append(key("s"), b("v"));
 		this.store.expireAt(key("s"), this.store.currentTimeMillis() - 1);
 
-		this.store.set(key("s"), b("fresh"));
+		this.store.set(key("s"), b("fresh"), null);
 
 		this.events.awaitEvent("expired " + this.prefix + "s");
 		assertThat(string(key("s"))).isEqualTo(b("fresh"));
