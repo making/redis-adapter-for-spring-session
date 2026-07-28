@@ -199,12 +199,18 @@ class EtcdBackendEndToEndTests {
 			.keyPrefix(this.properties.keyPrefix(0))
 			.build()) {
 			// Exactly what Spring Session's own delete does: the shadow key first, whose
-			// death is the announcement, then the session itself.
+			// death is the announcement, then the session itself. The event is waited for
+			// in between because Spring Session builds it by reading the session the
+			// second delete is about to remove, and the announcement travels out of band
+			// — the same race it runs against real Redis, and not this backend's to fix.
 			otherAdapter.delete(shadowKey(saved.getId()));
+
+			this.events.awaitEvent(SessionDeletedEvent.class, saved.getId());
+
 			otherAdapter.delete(sessionKey(saved.getId()));
 		}
 
-		this.events.awaitEvent(SessionDeletedEvent.class, saved.getId());
+		assertThat(this.sessions.findById(saved.getId())).isNull();
 	}
 
 	/**
