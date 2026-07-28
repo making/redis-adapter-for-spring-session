@@ -49,7 +49,7 @@ import java.util.Locale;
  */
 public final class FoundationDbNativeClient {
 
-	private static final String VERSION = System.getProperty("foundationdb.version", "7.3.63");
+	private static final String VERSION = System.getProperty("foundationdb.version", "7.4.6");
 
 	private static final String RELEASE = "https://github.com/apple/foundationdb/releases/download/" + VERSION + "/";
 
