@@ -77,6 +77,55 @@ class InMemoryKeyValueStoreTest {
 		assertThatThrownBy(() -> this.store.append(b("h"), b("x"))).isInstanceOf(TypeMismatchException.class);
 	}
 
+	@Test
+	void setStoresAndReadsBackExactBytes() {
+		byte[] binary = { 0, 13, 10, -1, 42 }; // NUL CR LF 0xFF, arbitrary
+		this.store.set(b("k"), binary);
+		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(binary);
+	}
+
+	@Test
+	void setReplacesAValueOfAnotherTypeWholesale() {
+		this.store.hset(b("k"), Map.of(b("f"), b("v")));
+		this.store.set(b("k"), b("plain"));
+		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("plain"));
+	}
+
+	@Test
+	void setDropsTheDeadlineTheKeyHad() {
+		this.store.append(b("k"), b("v"));
+		this.store.expireAt(b("k"), this.clock.get() + 1000);
+
+		this.store.set(b("k"), b("fresh"));
+
+		assertThat(this.store.getExpireAt(b("k"))).isNull();
+		this.clock.addAndGet(5000);
+		assertThat(this.store.exists(b("k"))).isTrue();
+		assertThat(this.listener.expired).isEmpty();
+	}
+
+	@Test
+	void setOverAnOverdueKeyAnnouncesTheExpiryFirst() {
+		this.store.append(b("k"), b("v"));
+		this.store.expireAt(b("k"), this.clock.get() - 1);
+
+		this.store.set(b("k"), b("fresh"));
+
+		assertThat(this.listener.expired).containsExactly("k");
+		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("fresh"));
+	}
+
+	/** Overwriting a key is not deleting it, and a session event must not be invented. */
+	@Test
+	void setOverALiveKeyFiresNothing() {
+		this.store.append(b("k"), b("v"));
+
+		this.store.set(b("k"), b("fresh"));
+
+		assertThat(this.listener.deleted).isEmpty();
+		assertThat(this.listener.expired).isEmpty();
+	}
+
 	// --- HASH --------------------------------------------------------------------------
 
 	@Test

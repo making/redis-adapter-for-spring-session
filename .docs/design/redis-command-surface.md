@@ -87,6 +87,26 @@ Behavioural note: this store touches the **session hash** key, not the shadow ke
 cleanup only forces a stale hash to be reclaimed. `SessionExpiredEvent` still comes from
 the shadow key expiring on its own TTL, so §C is unchanged and nothing extra is wired.
 
+### Beyond Spring Session: `SET` and `GET`
+
+Neither is on any path Spring Session takes. They are implemented because a Redis server nobody
+can put a value into and read back out cannot be tried out with a `redis-cli`, only pointed at an
+application, and every backend implements them, so what a demo shows is the backend rather than a
+special case.
+
+| Wire command | Behaviour | Reply |
+|---|---|---|
+| `SET key value` | replace the key with a STRING, **whatever type it held**, and **drop any TTL** it had; announce nothing (overwriting is not deleting), except the usual lazy expiry of an overdue key first | `+OK` |
+| `GET key` | the string, or a null bulk if the key is absent; `WRONGTYPE` if it holds anything else | bulk / null bulk |
+
+`SET` takes **no options**. `EX`/`PX`/`EXAT`/`PXAT`, `NX`/`XX`, `KEEPTTL` and `GET` are each a
+conditional or combined write the `KeyValueStore` SPI does not express — and a distributed backend
+cannot honour one by following the write with a second round trip, since a process that dies
+between the two leaves a key that never expires. Anything after the value is therefore answered
+`ERR syntax error` rather than accepted and ignored, which would leave a client believing in a
+deadline nothing will ever set. `EXPIRE` / `PEXPIRE` put a deadline on a key that is already
+there.
+
 ## C. Passive & active expiration (critical for indexed mode)
 
 Spring Session's `SessionExpiredEvent` and `SessionDeletedEvent` are driven **entirely by

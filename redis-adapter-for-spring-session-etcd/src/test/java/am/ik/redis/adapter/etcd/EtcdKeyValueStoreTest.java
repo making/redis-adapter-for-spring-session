@@ -112,6 +112,54 @@ class EtcdKeyValueStoreTest {
 		assertThatThrownBy(() -> this.store.append(b("h"), b("x"))).isInstanceOf(TypeMismatchException.class);
 	}
 
+	@Test
+	void setStoresAndReadsBackExactBytes() {
+		byte[] binary = { 0, 13, 10, -1, 42 }; // NUL CR LF 0xFF, arbitrary
+
+		this.store.set(b("k"), binary);
+
+		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(binary);
+	}
+
+	@Test
+	void setReplacesAValueOfAnotherTypeWholesale() {
+		this.store.hset(b("k"), fields("a", "1"));
+
+		this.store.set(b("k"), b("plain"));
+
+		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("plain"));
+	}
+
+	/**
+	 * {@code SET} drops the deadline, so the key must come off the lease that carried it
+	 * — and that lease, now holding nothing, has to be revoked rather than left to age
+	 * out.
+	 */
+	@Test
+	void setDropsTheDeadlineAndRevokesTheLeaseItWasOn() {
+		this.store.append(b("k"), b("v"));
+		this.store.expireAt(b("k"), this.store.currentTimeMillis() + 60_000);
+		long lease = leaseOf(b("k"));
+		assertThat(lease).isNotZero();
+
+		this.store.set(b("k"), b("fresh"));
+
+		assertThat(this.store.getExpireAt(b("k"))).isNull();
+		assertThat(leaseOf(b("k"))).isZero();
+		assertThat(leases()).doesNotContain(lease);
+	}
+
+	@Test
+	void setOverAnOverdueKeyAnnouncesTheExpiryFirst() {
+		this.store.append(b("k"), b("v"));
+		this.store.expireAt(b("k"), this.store.currentTimeMillis() - 1);
+
+		this.store.set(b("k"), b("fresh"));
+
+		this.listener.awaitEvent("expired k");
+		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("fresh"));
+	}
+
 	// --- HASH --------------------------------------------------------------------------
 
 	@Test

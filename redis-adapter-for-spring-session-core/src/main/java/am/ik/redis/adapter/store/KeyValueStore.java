@@ -60,6 +60,22 @@ public interface KeyValueStore extends AutoCloseable {
 	boolean exists(byte[] key);
 
 	/**
+	 * Stores {@code value} as a string under {@code key}, replacing whatever was there —
+	 * of whatever type — and dropping any TTL it had, exactly as Redis's {@code SET}
+	 * does.
+	 *
+	 * <p>
+	 * Replacing a live value fires <strong>no</strong> key event: overwriting a key is
+	 * not deleting it, and Spring Session's {@code del} / {@code expired} notifications
+	 * must not be synthesized from a write. The one exception is the usual lazy
+	 * expiration — a key whose deadline has passed fires {@code onExpired} and is gone
+	 * before this value takes its place.
+	 * @param key the key bytes
+	 * @param value the bytes to store (may be empty)
+	 */
+	void set(byte[] key, byte[] value);
+
+	/**
 	 * Appends {@code value} to the string stored under {@code key}. If the key is absent
 	 * it is created as a string equal to {@code value} (so appending an empty array
 	 * materializes a zero-length string). Any existing TTL is preserved.

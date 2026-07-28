@@ -634,7 +634,8 @@ forces and what the tests do about a native library that is not in the jar.
 
 ## What is implemented
 
-Only what Spring Session issues, plus the handshake a client needs to get that far.
+What Spring Session issues, the handshake a client needs to get that far, and `SET` / `GET`, which
+it never sends and which are there so that the server can be tried out by hand.
 
 <!-- commands -->
 
@@ -648,6 +649,19 @@ Only what Spring Session issues, plus the handshake a client needs to get that f
 | `SADD`, `SREM`, `SMEMBERS` | The principal index and the expiration buckets. |
 | `ZADD`, `ZREM`, `ZREVRANGEBYSCORE` | The optional sorted-set expiration store. |
 | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`, `PSUBSCRIBE`, `PUNSUBSCRIBE` | Session events, together with the `__keyevent@<db>__:del` and `__keyevent@<db>__:expired` notifications the adapter emits when a key goes. |
+| `SET`, `GET` | Nothing Spring Session does — a `redis-cli` pointed at the server, so that a backend can be tried out by hand rather than only through an application. |
+
+`SET` takes no options: `EX`, `NX`, `KEEPTTL` and the rest are each a conditional or combined
+write the backend SPI does not express, and a backend spread over several nodes cannot honour one
+by following the write with a second round trip, so they are answered `ERR syntax error` rather
+than quietly given semantics they do not have. A plain `SET` replaces the key whatever it held and
+drops the deadline it had, as Redis does; `EXPIRE` and `PEXPIRE` put a new one on it:
+
+```bash
+redis-cli -p 6379 SET demo hello
+redis-cli -p 6379 EXPIRE demo 10
+redis-cli -p 6379 GET demo
+```
 
 Values are opaque. Only key names and hash-field names are text; everything else is stored and
 returned byte for byte, whichever serializer the application uses.
@@ -668,6 +682,7 @@ core module only. It never sees RESP, connections or Spring.
 | `currentTimeMillis()` | The store's clock. The command layer converts relative TTLs against it, so expiry stays consistent. |
 | `get(byte[])` | The typed value, or `null` if the key is absent or has expired. |
 | `exists(byte[])` | Whether the key is there, honouring expiry. |
+| `set(byte[], byte[])` | Replaces the key with a string, whatever it held and whatever deadline it had, announcing nothing. |
 | `append(byte[], byte[])` | Appends to a string, creating it if absent — appending nothing materializes an empty one. |
 | `hset(byte[], Map)` | Sets hash fields, creating the hash if absent. |
 | `sadd(byte[], List)`, `srem(byte[], List)` | Adds to and removes from a set; an emptied set removes the key. |

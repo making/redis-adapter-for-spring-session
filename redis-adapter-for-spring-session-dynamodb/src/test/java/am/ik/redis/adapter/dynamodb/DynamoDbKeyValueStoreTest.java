@@ -99,6 +99,54 @@ class DynamoDbKeyValueStoreTest {
 		assertThatThrownBy(() -> this.store.append(b("h"), b("x"))).isInstanceOf(TypeMismatchException.class);
 	}
 
+	@Test
+	void setStoresAndReadsBackExactBytes() {
+		byte[] binary = { 0, 13, 10, -1, 42 }; // NUL CR LF 0xFF, arbitrary
+
+		this.store.set(b("k"), binary);
+
+		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(binary);
+	}
+
+	/**
+	 * A hash is one item per field, so replacing it with a string has to take those items
+	 * with it: a string's removal never looks for them, and a stray would be read as a
+	 * field of the next hash written under the same key.
+	 */
+	@Test
+	void setReplacesAValueOfAnotherTypeAndTakesItsItemsWithIt() {
+		this.store.hset(b("k"), fields("a", "1"));
+
+		this.store.set(b("k"), b("plain"));
+
+		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("plain"));
+		assertThat(this.store.delete(b("k"))).isTrue();
+		assertThat(this.store.hset(b("k"), fields("c", "3"))).isEqualTo(1);
+		assertThat(asHash(this.store.get(b("k"))).fields()).containsOnlyKeys(ByteArrayKey.of(b("c")));
+	}
+
+	@Test
+	void setDropsTheDeadlineTheKeyHad() {
+		this.store.append(b("k"), b("v"));
+		this.store.expireAt(b("k"), this.store.currentTimeMillis() + 60_000);
+
+		this.store.set(b("k"), b("fresh"));
+
+		assertThat(this.store.getExpireAt(b("k"))).isNull();
+		this.listener.assertSilence(Duration.ofMillis(700));
+	}
+
+	@Test
+	void setOverAnOverdueKeyAnnouncesTheExpiryFirst() {
+		this.store.append(b("k"), b("v"));
+		this.store.expireAt(b("k"), this.store.currentTimeMillis() - 1);
+
+		this.store.set(b("k"), b("fresh"));
+
+		this.listener.awaitEvent("expired k");
+		assertThat(asString(this.store.get(b("k"))).value()).containsExactly(b("fresh"));
+	}
+
 	// --- HASH --------------------------------------------------------------------------
 
 	@Test

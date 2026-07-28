@@ -229,6 +229,61 @@ public final class EtcdKeyValueStore implements KeyValueStore {
 
 	// --- string ------------------------------------------------------------------------
 
+	/**
+	 * {@inheritDoc}
+	 *
+	 * <p>
+	 * This is the one write that does not go through the batching queue: it replaces the
+	 * value rather than deriving one from what is there, so there is nothing for a batch
+	 * to fold together, and it has to leave the key on no lease at all — which is a
+	 * decision about the key's deadline, and those are taken with the key held.
+	 */
+	@Override
+	public void set(byte[] key, byte[] value) {
+		byte[] stored = value.clone();
+		this.queues.exclusively(key, () -> {
+			setHeld(key, stored);
+			return true;
+		});
+	}
+
+	private void setHeld(byte[] key, byte[] value) {
+		byte[] etcdKey = etcdKey(key);
+		for (int attempt = 1; attempt <= this.maxAttempts; attempt++) {
+			Kv kv = this.client.get(etcdKey);
+			long revision = 0;
+			long lease = EtcdClient.NO_LEASE;
+			if (kv != null) {
+				revision = kv.modRevision();
+				Envelope envelope = Envelope.decode(kv.value());
+				if (!envelope.isTombstone() && envelope.isExpired(currentTimeMillis())) {
+					// Redis expires the key first and creates it anew second, so the
+					// removal is a round trip of its own and every replica's watch sees
+					// the
+					// expiry before this value exists.
+					this.client.deleteIfUnchanged(etcdKey, revision);
+					continue;
+				}
+				// A tombstone reads as absent, but its revision still guards the write,
+				// so
+				// what replaces it cannot overwrite a value written in the meantime.
+				lease = kv.lease();
+			}
+			EtcdClient.Write written = this.client.putIfUnchanged(etcdKey, revision,
+					Envelope.of(new StringValue(value), Envelope.NO_EXPIRY, Envelope.NO_LEASE_TTL).encode(),
+					EtcdClient.NO_LEASE);
+			if (written.written()) {
+				// SET drops the deadline the key had, so the lease it was on now holds
+				// nothing — and a lease outlives the key it was granted for by as much as
+				// its remaining TTL.
+				this.client.revokeLeaseQuietly(lease);
+				return;
+			}
+			backOff(attempt);
+		}
+		throw contention("SET", key);
+	}
+
 	@Override
 	public int append(byte[] key, byte[] value) {
 		return update(key, current -> {

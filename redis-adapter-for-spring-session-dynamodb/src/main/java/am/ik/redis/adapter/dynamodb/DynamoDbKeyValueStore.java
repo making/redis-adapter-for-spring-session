@@ -316,6 +316,50 @@ public final class DynamoDbKeyValueStore implements KeyValueStore {
 	// --- string ------------------------------------------------------------------------
 
 	@Override
+	public void set(byte[] key, byte[] value) {
+		String what = "SET " + ByteArrayKey.of(key);
+		requireFits(what, metaPk(key), META_SK, value.length);
+		byte[] stored = value.clone();
+		this.locks.exclusively(key, () -> {
+			for (int attempt = 1; attempt <= this.maxAttempts; attempt++) {
+				Meta meta = readMeta(key);
+				if (meta != null && meta.isExpired(currentTimeMillis())) {
+					// Redis expires the key first and creates it anew second, so the
+					// death
+					// of what was there is announced rather than swallowed by the write.
+					expireOverdue(key, meta);
+					meta = readMeta(key);
+				}
+				Map<String, AttributeValue> item = newMeta(key, TYPE_STRING);
+				item.put("v", AttributeValue.fromB(SdkBytes.fromByteArray(stored)));
+				// The whole meta item is replaced, so the deadline attributes go with the
+				// old value — SET drops the TTL — and the incarnation counter moves on,
+				// or
+				// a removal guarded on the old one would take this value with it.
+				boolean written = (meta == null)
+						? putConditional(what, item, "attribute_not_exists(#pk)", Map.of("#pk", "pk"), Map.of())
+						: replaceMeta(what, item, meta);
+				if (written) {
+					if (meta != null && !TYPE_STRING.equals(meta.type())) {
+						// A string has no children, and the meta no longer names the type
+						// that wrote them, so nothing can read them: they only have to
+						// go.
+						purgeChildren(key);
+					}
+					return true;
+				}
+				backOff(attempt);
+			}
+			throw contention("SET", key);
+		});
+	}
+
+	private boolean replaceMeta(String what, Map<String, AttributeValue> item, Meta meta) {
+		item.put("ver", number(meta.version() + 1));
+		return putConditional(what, item, "#ver = :ver", Map.of("#ver", "ver"), Map.of(":ver", number(meta.version())));
+	}
+
+	@Override
 	public int append(byte[] key, byte[] value) {
 		return this.locks.exclusively(key, () -> {
 			for (int attempt = 1; attempt <= this.maxAttempts; attempt++) {

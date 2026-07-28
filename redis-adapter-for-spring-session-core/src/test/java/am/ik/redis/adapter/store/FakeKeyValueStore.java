@@ -105,6 +105,20 @@ public final class FakeKeyValueStore implements KeyValueStore {
 	}
 
 	@Override
+	public void set(byte[] key, byte[] value) {
+		ByteArrayKey k = ByteArrayKey.of(key);
+		Event[] event = { Event.NONE };
+		byte[] stored = value.clone();
+		this.entries.compute(k, (ignored, current) -> {
+			// An overdue key dies announced; a live one is replaced in silence, deadline
+			// and all.
+			live(current, event);
+			return new Entry(new StringValue(stored), null);
+		});
+		fire(k, event[0]);
+	}
+
+	@Override
 	public int append(byte[] key, byte[] value) {
 		ByteArrayKey k = ByteArrayKey.of(key);
 		Event[] event = { Event.NONE };

@@ -91,6 +91,50 @@ class FoundationDbKeyValueStoreTest {
 		assertThat(this.store.getExpireAt(key("shadow"))).isEqualTo(deadline);
 	}
 
+	@Test
+	void setStoresAndReadsBackExactBytes() {
+		byte[] binary = { 0, 13, 10, -1, 42 }; // NUL CR LF 0xFF, arbitrary
+
+		this.store.set(key("s"), binary);
+
+		assertThat(string(key("s"))).isEqualTo(binary);
+	}
+
+	/**
+	 * One key per field is the layout, so replacing a hash with a string has to take the
+	 * fields with it — a stray would otherwise be read as part of whatever comes next.
+	 */
+	@Test
+	void setReplacesAValueOfAnotherTypeWholesale() {
+		this.store.hset(key("k"), fields("a", "1", "b", "2"));
+
+		this.store.set(key("k"), b("plain"));
+
+		assertThat(string(key("k"))).isEqualTo(b("plain"));
+	}
+
+	@Test
+	void setDropsTheDeadlineTheKeyHad() {
+		this.store.append(key("s"), b("v"));
+		this.store.expireAt(key("s"), this.store.currentTimeMillis() + 60_000);
+
+		this.store.set(key("s"), b("fresh"));
+
+		assertThat(this.store.getExpireAt(key("s"))).isNull();
+		this.events.assertSilence(SILENCE);
+	}
+
+	@Test
+	void setOverAnOverdueKeyAnnouncesTheExpiryFirst() {
+		this.store.append(key("s"), b("v"));
+		this.store.expireAt(key("s"), this.store.currentTimeMillis() - 1);
+
+		this.store.set(key("s"), b("fresh"));
+
+		this.events.awaitEvent("expired " + this.prefix + "s");
+		assertThat(string(key("s"))).isEqualTo(b("fresh"));
+	}
+
 	// --- hashes ------------------------------------------------------------------------
 
 	@Test

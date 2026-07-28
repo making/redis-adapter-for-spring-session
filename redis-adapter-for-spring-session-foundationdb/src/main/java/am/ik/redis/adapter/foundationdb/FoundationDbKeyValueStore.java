@@ -313,6 +313,25 @@ public final class FoundationDbKeyValueStore implements KeyValueStore {
 	// --- string ------------------------------------------------------------------------
 
 	@Override
+	public void set(byte[] key, byte[] value) {
+		String what = "SET " + name(key);
+		byte[] stored = value.clone();
+		inTransaction(what, attempt -> {
+			// An overdue key dies announced before the new value takes its place; a live
+			// one is replaced in silence, whatever it held, as Redis replaces it.
+			Meta meta = live(attempt, key);
+			if (meta != null) {
+				clearDue(attempt, key, meta);
+			}
+			// The children of what was here — and the strays of a key that crashed
+			// mid-removal — would otherwise be read as part of a later value.
+			attempt.transaction.clear(childRange(key));
+			writeMeta(attempt, key, new Meta(TYPE_STRING, null, stored), what);
+			return true;
+		});
+	}
+
+	@Override
 	public int append(byte[] key, byte[] value) {
 		String what = "APPEND " + name(key);
 		return inTransaction(what, attempt -> {

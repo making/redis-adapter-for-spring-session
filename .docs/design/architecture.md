@@ -164,6 +164,8 @@ Full detail with exact semantics, key formats, and edge cases:
   password is configured, accepted otherwise — see §8.1), `CLIENT`
   (`SETINFO`/`SETNAME` → OK), `SELECT`, `QUIT`, `COMMAND` (minimal). The exact handshake
   set is pinned empirically against a real Lettuce client (task 004).
+- Beyond Spring Session: `SET` (no options) and `GET`, so that a backend can be tried out with a
+  `redis-cli` rather than only through an application.
 - Opt-in (`SortedSetRedisSessionExpirationStore`): `ZADD`, `ZREM`, `ZREVRANGEBYSCORE`
   (task 009, done). An application that declares that bean gets one sorted set of
   expirations instead of the minute buckets; nothing else about the adapter changes,

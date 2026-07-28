@@ -161,6 +161,23 @@ public final class InMemoryKeyValueStore implements KeyValueStore {
 	// --- string ------------------------------------------------------------------------
 
 	@Override
+	public void set(byte[] key, byte[] value) {
+		ByteArrayKey k = ByteArrayKey.of(key);
+		long now = this.clock.getAsLong();
+		boolean[] expired = { false };
+		byte[] stored = value.clone();
+		this.map.compute(k, (kk, cur) -> {
+			// An overdue key dies announced before the new value takes its place; a live
+			// one is replaced in silence, deadline and all, as Redis replaces it.
+			passiveExpire(cur, now, expired);
+			return new Entry(new StringValue(stored), NO_EXPIRY);
+		});
+		if (expired[0]) {
+			fireExpired(k);
+		}
+	}
+
+	@Override
 	public int append(byte[] key, byte[] value) {
 		ByteArrayKey k = ByteArrayKey.of(key);
 		long now = this.clock.getAsLong();
