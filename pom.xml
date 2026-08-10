@@ -35,7 +35,7 @@
 		<!-- The AWS SDK the DynamoDB backend speaks with. Pinned here rather than left to
 		     spring-cloud-aws so that the store module (which has no Spring) and the server
 		     module built around it resolve the same SDK. -->
-		<awssdk.version>2.50.2</awssdk.version>
+		<awssdk.version>2.51.2</awssdk.version>
 		<spring-cloud-aws.version>4.1.0</spring-cloud-aws.version>
 		<testcontainers-floci.version>2.13.0</testcontainers-floci.version>
 		<!-- The FoundationDB client, and the version of the FoundationDB the tests run against:
